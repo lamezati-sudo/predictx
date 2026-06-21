@@ -1,0 +1,14 @@
+# Render.com blueprint — import this repo at https://render.com/deploy
+# The Next.js app should deploy to Vercel (cron + edge). This file deploys the market worker only.
+
+services:
+  - type: worker
+    name: predictx-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile.worker
+    plan: free
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

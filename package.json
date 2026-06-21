@@ -1,0 +1,38 @@
+{
+  "name": "predictx",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "worker": "tsx --env-file=.env.local worker/market-worker.ts",
+    "worker:prod": "tsx worker/market-worker.ts",
+    "dev:all": "concurrently -n web,worker -c blue,green \"npm run dev\" \"npm run worker\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "geist": "^1.7.2",
+    "lightweight-charts": "^5.0.7",
+    "lucide-react": "^0.511.0",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zustand": "^5.0.5"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/node": "^22.15.29",
+    "@types/react": "^19.1.6",
+    "@types/react-dom": "^19.1.5",
+    "eslint": "^9.28.0",
+    "eslint-config-next": "^15.3.3",
+    "tailwindcss": "^4.1.8",
+    "tsx": "^4.19.4",
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  }
+}
