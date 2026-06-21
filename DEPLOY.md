@@ -12,10 +12,31 @@ git add .
 git commit -m "PredictX: trading platform with Supabase backend"
 ```
 
-Create a repo on GitHub, then:
+Create a repo under **[lamezati-sudo](https://github.com/lamezati-sudo)** on GitHub, then:
 
 ```bash
-git remote add origin https://github.com/YOUR_USER/predictx.git
+git remote add origin https://github.com/lamezati-sudo/predictx.git
+git branch -M main
+git push -u origin main
+```
+
+### Option A — GitHub CLI (fastest)
+
+```bash
+gh auth login
+gh repo create lamezati-sudo/predictx --public --source=. --remote=origin --push
+```
+
+### Option B — GitHub website
+
+1. Go to [github.com/new](https://github.com/new) while logged in as **lamezati-sudo**
+2. Repository name: **`predictx`**
+3. **Private** or Public — your choice
+4. Do **not** add README / .gitignore (we already have them)
+5. Create repository, then run:
+
+```bash
+git remote add origin https://github.com/lamezati-sudo/predictx.git
 git branch -M main
 git push -u origin main
 ```

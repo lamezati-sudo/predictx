@@ -24,6 +24,8 @@ const FLUSH_MS     = 15000; // DB snapshot interval
 // ── Env ──────────────────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const CRON_SECRET  = process.env.CRON_SECRET;
+const SITE_URL     = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.SITE_URL;
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error("Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in .env.local");
   process.exit(1);
@@ -219,6 +221,28 @@ async function flushDb() {
   else console.log(`[flush] ${rows.length} ticks persisted`);
 }
 
+/** Hobby Vercel can't run * * * * * crons — worker pings settle every 60s instead. */
+async function runSettlement() {
+  if (!CRON_SECRET || !SITE_URL) return;
+  try {
+    const base = SITE_URL.replace(/\/$/, "");
+    const res = await fetch(`${base}/api/cron/settle`, {
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      console.error("[settle]", res.status, await res.text());
+      return;
+    }
+    const body = (await res.json()) as { windowsSettled?: number; predictionsSettled?: number };
+    if ((body.windowsSettled ?? 0) > 0 || (body.predictionsSettled ?? 0) > 0) {
+      console.log("[settle]", body);
+    }
+  } catch (e) {
+    console.error("[settle]", e);
+  }
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
   console.log("PredictX market worker starting…");
@@ -228,6 +252,14 @@ async function main() {
   setInterval(broadcastAll, BROADCAST_MS);
   setInterval(flushDb, FLUSH_MS);
   setInterval(syncWindows, 30000); // pick up new wall-clock windows
+  setInterval(runSettlement, 60_000);
+
+  if (CRON_SECRET && SITE_URL) {
+    console.log(`Settlement ping → ${SITE_URL}/api/cron/settle every 60s`);
+    void runSettlement();
+  } else {
+    console.warn("CRON_SECRET or SITE_URL missing — expiry settlement disabled");
+  }
 
   console.log(`Broadcast ${1000 / BROADCAST_MS} Hz · DB flush every ${FLUSH_MS / 1000}s`);
 }

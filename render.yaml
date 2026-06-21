@@ -12,3 +12,7 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: CRON_SECRET
+        sync: false
+      - key: NEXT_PUBLIC_SITE_URL
+        sync: false
