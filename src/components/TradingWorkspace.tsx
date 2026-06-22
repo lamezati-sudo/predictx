@@ -79,14 +79,16 @@ export function TradingWorkspace() {
         setCandles(candles);
         setWindow(win.id, target, endMs);
         targetRef.current = target;
-        loadTicks(ticks ?? []);
+        loadTicks(ticks ?? [], win.id);
 
         const price = candles[candles.length - 1]?.close ?? lastPriceRef.current;
         if (price > 0) {
-          setCurrentPrice(price);
           lastPriceRef.current = price;
           const msLeft = msToWindowEnd(tf);
           const prob   = calcDirectionProb(directionRef.current, price, target, msLeft, TIMEFRAME_MS[tf]);
+          // Seed currentPrice AND prices[asset] so active-trade P&L is accurate
+          // immediately on refresh instead of showing $0 until the first WS tick.
+          tickPrice(asset, price, prob);
           const active = useGameStore.getState().predictions.find(
             (p) => p.status === "active" && p.asset === asset && p.timeframe === tf
           );
@@ -107,7 +109,7 @@ export function TradingWorkspace() {
         setLoading(false);
       }
     },
-    [setWindow, setCurrentPrice, setLevels, setCurrentProb, loadTicks]
+    [setWindow, setLevels, setCurrentProb, loadTicks, tickPrice]
   );
 
   useEffect(() => {

@@ -29,6 +29,10 @@ export function useWindowProbFeed(
   const ticksRef                = useRef<ClientProbTick[]>([]);
   const directionRef            = useRef(direction);
   directionRef.current          = direction;
+  // Which window the ticks currently in state belong to — lets us skip the
+  // clear-on-windowId reset when history for this window was just loaded
+  // (avoids a race that wiped the graph on refresh).
+  const dataWindowRef           = useRef<string | null>(null);
 
   const applyChart = useCallback((raw: ClientProbTick[]) => {
     ticksRef.current = raw;
@@ -39,8 +43,10 @@ export function useWindowProbFeed(
     applyChart(mergeTick(ticksRef.current, incoming, directionRef.current));
   }, [applyChart]);
 
-  // New window → clear series (fresh graph for new target)
+  // New window → clear series (fresh graph for new target), unless freshly
+  // loaded history for this exact window is already in state.
   useEffect(() => {
+    if (dataWindowRef.current === windowId) return;
     ticksRef.current = [];
     setProbData([]);
   }, [windowId]);
@@ -88,7 +94,8 @@ export function useWindowProbFeed(
     return () => { supabase.removeChannel(channel); };
   }, [windowId, applyOne]);
 
-  const loadTicks = useCallback((raw: WindowProbTick[]) => {
+  const loadTicks = useCallback((raw: WindowProbTick[], forWindowId: string | null) => {
+    dataWindowRef.current = forWindowId;
     applyChart(ingestTicks(raw, directionRef.current));
   }, [applyChart]);
 
