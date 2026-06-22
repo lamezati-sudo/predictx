@@ -10,14 +10,15 @@ import {
 } from "react";
 import {
   createChart,
-  CandlestickSeries,
+  AreaSeries,
   BaselineSeries,
   type IChartApi,
   type ISeriesApi,
   type Time,
   ColorType,
+  LineType,
 } from "lightweight-charts";
-import type { Asset, Candle, Direction, ProbLevels, Timeframe } from "@/types";
+import type { Asset, Direction, ProbLevels, Timeframe } from "@/types";
 import { formatPrice } from "@/types";
 import type { ProbPoint } from "@/lib/window-prob";
 import { useGameStore } from "@/store/game-store";
@@ -33,7 +34,7 @@ type DraggableKind = "stopLoss" | "takeProfit";
 interface Props {
   asset:             Asset;
   timeframe:         Timeframe;
-  candles:           Candle[];
+  priceData:         ProbPoint[];
   probData:          ProbPoint[];
   currentPrice:      number;
   targetPrice:       number;
@@ -58,7 +59,7 @@ function fmtCountdown(ms: number) {
 }
 
 export const TradingChart = forwardRef<TradingChartHandle, Props>(function TradingChart({
-  asset, timeframe, candles, probData, currentPrice, targetPrice,
+  asset, timeframe, priceData, probData, currentPrice, targetPrice,
   windowStartSec, windowEndSec,
   windowMsRemaining, levels, direction,
   tpQty, slQty, onLevelsChange, onLevelsCommit, onTpQtyChange, onSlQtyChange,
@@ -74,17 +75,16 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
-  const btcSeriesRef  = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const btcSeriesRef  = useRef<ISeriesApi<"Area"> | null>(null);
   const probSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
-  // Forming candle (OHLC of the latest 1-min bar) updated tick-by-tick
-  const liveCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
 
   const [view,    setView]    = useState<ChartView>("prob");
   const [dragging, setDragging] = useState<DraggableKind | null>(null);
   const [lineY,   setLineY]   = useState({ tp: 0, sl: 0, mid: 0, entry: 0 });
 
   const viewRef               = useRef<ChartView>("prob");
-  const latestCandleTimeRef   = useRef<number>(0);
+  const latestPriceTimeRef    = useRef<number>(0);
+  const priceDataLenRef       = useRef(0);
   const levelsRef             = useRef(levels);
   const currentPriceRef       = useRef(currentPrice);
   const targetPriceRef        = useRef(targetPrice);
@@ -146,22 +146,14 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   // ─── Imperative handle ─────────────────────────────────────────────────
   useImperativeHandle(ref, () => ({
     updateLivePrice: (price: number) => {
-      const t = latestCandleTimeRef.current;
-      if (t === 0) return;
+      if (price <= 0) return;
       currentPriceRef.current = price;
-      const btcSeries = btcSeriesRef.current;
-      const live = liveCandleRef.current;
-      if (btcSeries && live && live.time === t) {
-        live.close = price;
-        live.high  = Math.max(live.high, price);
-        live.low   = Math.min(live.low, price);
-        btcSeries.update({
-          time:  t as Time,
-          open:  live.open,
-          high:  live.high,
-          low:   live.low,
-          close: live.close,
-        });
+      // Smooth the tip between worker ticks by replacing the latest point
+      // in place (same second → never out of order).
+      const series = btcSeriesRef.current;
+      const t = latestPriceTimeRef.current;
+      if (series && t > 0 && priceDataLenRef.current > 0) {
+        series.update({ time: t as Time, value: price });
       }
       requestAnimationFrame(updatePositions);
     },
@@ -206,13 +198,13 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       handleScroll: { vertTouchDrag: false },
     });
 
-    // BTC price series — real candlesticks so small ticks show as wicks/body
-    const btcSeries = chart.addSeries(CandlestickSeries, {
-      upColor:       "#00c47a",
-      downColor:     "#ff3b5b",
-      wickUpColor:   "#00c47a",
-      wickDownColor: "#ff3b5b",
-      borderVisible: false,
+    // Price series — continuous line from the same 1 Hz spot-price tick feed
+    const btcSeries = chart.addSeries(AreaSeries, {
+      lineColor:   "#e2e2e2",
+      lineWidth:   2,
+      lineType:    LineType.Simple,
+      topColor:    "rgba(226,226,226,0.07)",
+      bottomColor: "rgba(0,0,0,0)",
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -285,42 +277,41 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       windowRangeRef.current = { start: windowStartSec, end: windowEndSec };
       probDataLenRef.current = 0;
       latestProbTimeRef.current = 0;
-      liveCandleRef.current = null;
+      priceDataLenRef.current = 0;
+      latestPriceTimeRef.current = 0;
       probSeriesRef.current?.setData([]);
       btcSeriesRef.current?.setData([]);
     }
     applyWindowRange();
   }, [windowStartSec, windowEndSec, applyWindowRange]);
 
-  // ─── Feed BTC candles ──────────────────────────────────────────────────
+  // ─── Feed price data (continuous spot-price line from the tick feed) ───
   useEffect(() => {
     const series = btcSeriesRef.current;
     if (!series) return;
-    if (candles.length === 0) {
-      series.setData([]);
-      liveCandleRef.current = null;
+
+    if (priceData.length === 0) {
+      if (priceDataLenRef.current !== 0) {
+        series.setData([]);
+        priceDataLenRef.current = 0;
+        latestPriceTimeRef.current = 0;
+      }
       return;
     }
 
-    series.setData(candles.map((c) => ({
-      time:  c.time as Time,
-      open:  c.open,
-      high:  c.high,
-      low:   c.low,
-      close: c.close,
-    })));
-    const last = candles[candles.length - 1];
-    latestCandleTimeRef.current = last.time;
-    liveCandleRef.current = {
-      time:  last.time,
-      open:  last.open,
-      high:  last.high,
-      low:   last.low,
-      close: last.close,
-    };
+    series.setData(priceData.map((p) => ({ time: p.time as Time, value: p.value })));
+    priceDataLenRef.current = priceData.length;
+    latestPriceTimeRef.current = priceData[priceData.length - 1].time;
+
+    const up = priceData[priceData.length - 1].value >= priceData[0].value;
+    series.applyOptions({
+      lineColor:   up ? "#00c47a" : "#ff3b5b",
+      topColor:    up ? "rgba(0,196,122,0.12)" : "rgba(255,59,91,0.10)",
+      bottomColor: "rgba(0,0,0,0)",
+    });
     applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
-  }, [candles, updatePositions, applyWindowRange]);
+  }, [priceData, updatePositions, applyWindowRange]);
 
   // ─── Feed probability data (setData only — preserves frozen history) ───
   useEffect(() => {
@@ -361,27 +352,17 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     }
   }, [storeProb, updatePositions]);
 
-  // ─── Live price / levels update ────────────────────────────────────────
+  // ─── Live price tip (smooth the latest point between worker ticks) ─────
   useEffect(() => {
     const series = btcSeriesRef.current;
-    if (!series || currentPrice <= 0 || candles.length === 0) return;
-    const last = candles[candles.length - 1];
-    latestCandleTimeRef.current = last.time;
-    const live = liveCandleRef.current;
-    if (live && live.time === last.time) {
-      live.close = currentPrice;
-      live.high  = Math.max(live.high, currentPrice);
-      live.low   = Math.min(live.low, currentPrice);
-      series.update({
-        time:  last.time as Time,
-        open:  live.open,
-        high:  live.high,
-        low:   live.low,
-        close: live.close,
-      });
+    if (!series || currentPrice <= 0) return;
+    currentPriceRef.current = currentPrice;
+    const t = latestPriceTimeRef.current;
+    if (t > 0 && priceDataLenRef.current > 0) {
+      series.update({ time: t as Time, value: currentPrice });
     }
     requestAnimationFrame(updatePositions);
-  }, [currentPrice, candles, updatePositions]);
+  }, [currentPrice, updatePositions]);
 
   useEffect(() => {
     // Update on every levels/targetPrice change (covers initial load + drag)
