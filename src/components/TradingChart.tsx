@@ -10,13 +10,12 @@ import {
 } from "react";
 import {
   createChart,
-  AreaSeries,
+  CandlestickSeries,
   BaselineSeries,
   type IChartApi,
   type ISeriesApi,
   type Time,
   ColorType,
-  LineType,
 } from "lightweight-charts";
 import type { Asset, Candle, Direction, ProbLevels, Timeframe } from "@/types";
 import { formatPrice } from "@/types";
@@ -75,8 +74,10 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef   = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<IChartApi | null>(null);
-  const btcSeriesRef  = useRef<ISeriesApi<"Area"> | null>(null);
+  const btcSeriesRef  = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const probSeriesRef = useRef<ISeriesApi<"Baseline"> | null>(null);
+  // Forming candle (OHLC of the latest 1-min bar) updated tick-by-tick
+  const liveCandleRef = useRef<{ time: number; open: number; high: number; low: number; close: number } | null>(null);
 
   const [view,    setView]    = useState<ChartView>("prob");
   const [dragging, setDragging] = useState<DraggableKind | null>(null);
@@ -149,7 +150,19 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       if (t === 0) return;
       currentPriceRef.current = price;
       const btcSeries = btcSeriesRef.current;
-      if (btcSeries) btcSeries.update({ time: t as Time, value: price });
+      const live = liveCandleRef.current;
+      if (btcSeries && live && live.time === t) {
+        live.close = price;
+        live.high  = Math.max(live.high, price);
+        live.low   = Math.min(live.low, price);
+        btcSeries.update({
+          time:  t as Time,
+          open:  live.open,
+          high:  live.high,
+          low:   live.low,
+          close: live.close,
+        });
+      }
       requestAnimationFrame(updatePositions);
     },
     updateLiveProb: (_prob: number, _timeSeconds: number) => {
@@ -193,13 +206,13 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       handleScroll: { vertTouchDrag: false },
     });
 
-    // BTC price series
-    const btcSeries = chart.addSeries(AreaSeries, {
-      lineColor:   "#e2e2e2",
-      lineWidth:   2,
-      lineType:    LineType.Simple,
-      topColor:    "rgba(226,226,226,0.07)",
-      bottomColor: "rgba(0,0,0,0)",
+    // BTC price series — real candlesticks so small ticks show as wicks/body
+    const btcSeries = chart.addSeries(CandlestickSeries, {
+      upColor:       "#00c47a",
+      downColor:     "#ff3b5b",
+      wickUpColor:   "#00c47a",
+      wickDownColor: "#ff3b5b",
+      borderVisible: false,
       priceLineVisible: false,
       lastValueVisible: false,
     });
@@ -272,6 +285,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       windowRangeRef.current = { start: windowStartSec, end: windowEndSec };
       probDataLenRef.current = 0;
       latestProbTimeRef.current = 0;
+      liveCandleRef.current = null;
       probSeriesRef.current?.setData([]);
       btcSeriesRef.current?.setData([]);
     }
@@ -282,18 +296,28 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   useEffect(() => {
     const series = btcSeriesRef.current;
     if (!series) return;
-    if (candles.length === 0) { series.setData([]); return; }
+    if (candles.length === 0) {
+      series.setData([]);
+      liveCandleRef.current = null;
+      return;
+    }
 
-    const first = candles[0].close;
-    const last  = candles[candles.length - 1].close;
-    const up    = last >= first;
-    series.applyOptions({
-      lineColor:   up ? "#00c47a" : "#ff3b5b",
-      topColor:    up ? "rgba(0,196,122,0.12)" : "rgba(255,59,91,0.10)",
-      bottomColor: "rgba(0,0,0,0)",
-    });
-    series.setData(candles.map((c) => ({ time: c.time as Time, value: c.close })));
-    latestCandleTimeRef.current = candles[candles.length - 1].time;
+    series.setData(candles.map((c) => ({
+      time:  c.time as Time,
+      open:  c.open,
+      high:  c.high,
+      low:   c.low,
+      close: c.close,
+    })));
+    const last = candles[candles.length - 1];
+    latestCandleTimeRef.current = last.time;
+    liveCandleRef.current = {
+      time:  last.time,
+      open:  last.open,
+      high:  last.high,
+      low:   last.low,
+      close: last.close,
+    };
     applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
   }, [candles, updatePositions, applyWindowRange]);
@@ -343,12 +367,19 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     if (!series || currentPrice <= 0 || candles.length === 0) return;
     const last = candles[candles.length - 1];
     latestCandleTimeRef.current = last.time;
-    series.update({ time: last.time as Time, value: currentPrice });
-    const up = currentPrice >= (candles[0]?.close ?? currentPrice);
-    series.applyOptions({
-      lineColor:   up ? "#00c47a" : "#ff3b5b",
-      topColor:    up ? "rgba(0,196,122,0.12)" : "rgba(255,59,91,0.10)",
-    });
+    const live = liveCandleRef.current;
+    if (live && live.time === last.time) {
+      live.close = currentPrice;
+      live.high  = Math.max(live.high, currentPrice);
+      live.low   = Math.min(live.low, currentPrice);
+      series.update({
+        time:  last.time as Time,
+        open:  live.open,
+        high:  live.high,
+        low:   live.low,
+        close: live.close,
+      });
+    }
     requestAnimationFrame(updatePositions);
   }, [currentPrice, candles, updatePositions]);
 

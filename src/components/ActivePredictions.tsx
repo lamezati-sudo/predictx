@@ -16,6 +16,8 @@ export function ActivePredictions() {
   const predictions = useGameStore((s) => s.predictions);
   const history     = useGameStore((s) => s.history);
   const prices      = useGameStore((s) => s.prices);
+  const currentPrice = useGameStore((s) => s.currentPrice);
+  const currentAsset = useGameStore((s) => s.asset);
 
   if (predictions.length === 0 && history.length === 0) {
     return (
@@ -35,7 +37,14 @@ export function ActivePredictions() {
           </div>
           <div className="space-y-1.5 overflow-y-auto">
             {predictions.map((p) => {
-              const livePrice   = prices[p.asset];
+              // Prefer the per-asset feed; fall back to the viewed asset's
+              // currentPrice (covers the gap right after refresh before
+              // prices[asset] is seeded) and only then to entry.
+              const livePrice = prices[p.asset] > 0
+                ? prices[p.asset]
+                : p.asset === currentAsset && currentPrice > 0
+                  ? currentPrice
+                  : 0;
               const msRemaining = Math.max(0, p.expiresAt - Date.now());
               const totalMs     = TIMEFRAME_MS[p.timeframe];
 
