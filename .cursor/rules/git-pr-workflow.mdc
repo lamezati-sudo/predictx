@@ -1,0 +1,41 @@
+---
+description: Git branching and pull-request workflow — never merge without user-approved PRs
+alwaysApply: true
+---
+
+# Git PR workflow (PredictX)
+
+## Branch flow
+
+```
+feature/*  →  development  →  main  →  Vercel production
+```
+
+- `main` is the default branch (production).
+- `master` is legacy; do not use for new work.
+
+## Required process for every change
+
+1. Create a `feature/*` branch from `development`.
+2. Commit only the scoped change on that branch.
+3. Push the feature branch and open a PR: **feature → development** (`gh pr create`).
+4. **Stop and wait** for the user to review, approve, and merge the PR on GitHub.
+5. After the user merges, pull `development` locally — do **not** merge feature → development yourself.
+6. Open a second PR: **development → main**.
+7. **Stop and wait** again for user approval and merge.
+8. Only after `main` is merged on GitHub: pull `main` and deploy to Vercel if requested.
+
+## Never do without explicit user request
+
+- Local `git merge` into `development` or `main`
+- `git push` directly to `development` or `main` with new commits
+- `gh pr merge` or merging any PR — the user merges on GitHub
+- Skipping the PR step “to save time”
+
+## PR contents
+
+Each PR must include a clear summary and a short test plan checklist.
+
+## When user asks to deploy
+
+Deploy only from `main` after the development → main PR is merged and user confirms.
