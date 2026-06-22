@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
+  ingestTicks,
   mergeTick,
   ticksToChartPoints,
+  type ClientProbTick,
   type ProbPoint,
   type WindowProbTick,
 } from "@/lib/window-prob";
@@ -13,32 +15,35 @@ import type { Direction } from "@/types";
 /**
  * Shared window probability feed (listen-only):
  * - Loads persisted ticks from GET /api/window on mount
- * - Subscribes to Realtime Broadcast from the market worker (no client polling)
+ * - Subscribes to Realtime Broadcast from the market worker
  * - Optional postgres_changes as backup when worker flush lands
+ *
+ * Historical chart values are frozen at ingest — direction changes do not
+ * rewrite past points.
  */
 export function useWindowProbFeed(
   windowId: string | null,
   direction: Direction
 ) {
-  const [ticks, setTicks]       = useState<WindowProbTick[]>([]);
   const [probData, setProbData] = useState<ProbPoint[]>([]);
-  const ticksRef                = useRef<WindowProbTick[]>([]);
+  const ticksRef                = useRef<ClientProbTick[]>([]);
   const directionRef            = useRef(direction);
   directionRef.current          = direction;
 
-  const applyChart = useCallback((raw: WindowProbTick[]) => {
+  const applyChart = useCallback((raw: ClientProbTick[]) => {
     ticksRef.current = raw;
-    setTicks(raw);
-    setProbData(ticksToChartPoints(raw, directionRef.current));
+    setProbData(ticksToChartPoints(raw));
   }, []);
 
   const applyOne = useCallback((incoming: WindowProbTick) => {
-    applyChart(mergeTick(ticksRef.current, incoming));
+    applyChart(mergeTick(ticksRef.current, incoming, directionRef.current));
   }, [applyChart]);
 
+  // New window → clear series (fresh graph for new target)
   useEffect(() => {
-    setProbData(ticksToChartPoints(ticksRef.current, direction));
-  }, [direction]);
+    ticksRef.current = [];
+    setProbData([]);
+  }, [windowId]);
 
   useEffect(() => {
     if (!windowId) return;
@@ -56,7 +61,6 @@ export function useWindowProbFeed(
           spot_price: Number(p.spot_price),
         });
       })
-      // Backup: worker DB flush every 15s also triggers this
       .on(
         "postgres_changes",
         {
@@ -85,7 +89,7 @@ export function useWindowProbFeed(
   }, [windowId, applyOne]);
 
   const loadTicks = useCallback((raw: WindowProbTick[]) => {
-    applyChart(raw);
+    applyChart(ingestTicks(raw, directionRef.current));
   }, [applyChart]);
 
   return { probData, loadTicks };

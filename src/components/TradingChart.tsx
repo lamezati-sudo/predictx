@@ -38,6 +38,8 @@ interface Props {
   probData:          ProbPoint[];
   currentPrice:      number;
   targetPrice:       number;
+  windowStartSec:    number;
+  windowEndSec:      number;
   windowMsRemaining: number;
   levels:            ProbLevels | null;
   direction:         Direction;
@@ -58,6 +60,7 @@ function fmtCountdown(ms: number) {
 
 export const TradingChart = forwardRef<TradingChartHandle, Props>(function TradingChart({
   asset, timeframe, candles, probData, currentPrice, targetPrice,
+  windowStartSec, windowEndSec,
   windowMsRemaining, levels, direction,
   tpQty, slQty, onLevelsChange, onLevelsCommit, onTpQtyChange, onSlQtyChange,
 }, ref) {
@@ -86,11 +89,22 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   const targetPriceRef        = useRef(targetPrice);
   const currentProbRef        = useRef(0.5);
   const latestProbTimeRef     = useRef<number>(0);
+  const probDataLenRef        = useRef(0);
+  const windowRangeRef        = useRef({ start: 0, end: 0 });
 
   levelsRef.current       = levels;
   currentPriceRef.current = currentPrice;
   targetPriceRef.current  = targetPrice;
   viewRef.current         = view;
+
+  const applyWindowRange = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart || windowStartSec <= 0 || windowEndSec <= 0) return;
+    chart.timeScale().setVisibleRange({
+      from: windowStartSec as Time,
+      to:   windowEndSec as Time,
+    });
+  }, [windowStartSec, windowEndSec]);
 
   // ─── Sync overlay Y positions ─────────────────────────────────────────
   const updatePositions = useCallback(() => {
@@ -171,8 +185,10 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       timeScale: {
         borderColor: "#161616",
         timeVisible: true,
-        secondsVisible: true,
-        rightOffset: 4,
+        secondsVisible: false,
+        rightOffset: 0,
+        fixLeftEdge: true,
+        fixRightEdge: true,
       },
       handleScroll: { vertTouchDrag: false },
     });
@@ -181,7 +197,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     const btcSeries = chart.addSeries(AreaSeries, {
       lineColor:   "#e2e2e2",
       lineWidth:   2,
-      lineType:    LineType.Curved,
+      lineType:    LineType.Simple,
       topColor:    "rgba(226,226,226,0.07)",
       bottomColor: "rgba(0,0,0,0)",
       priceLineVisible: false,
@@ -243,16 +259,29 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   useEffect(() => {
     btcSeriesRef.current?.applyOptions({ visible: view === "btc" });
     probSeriesRef.current?.applyOptions({ visible: view === "prob" });
-    chartRef.current?.timeScale().scrollToRealTime();
-    // Double rAF: first frame lets the series visibility change flush,
-    // second frame reads coordinates correctly
+    applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
-  }, [view, updatePositions]);
+  }, [view, updatePositions, applyWindowRange]);
+
+  // ─── Lock X-axis to full wall-clock window ─────────────────────────────
+  useEffect(() => {
+    const changed =
+      windowRangeRef.current.start !== windowStartSec ||
+      windowRangeRef.current.end !== windowEndSec;
+    if (changed) {
+      windowRangeRef.current = { start: windowStartSec, end: windowEndSec };
+      probDataLenRef.current = 0;
+      probSeriesRef.current?.setData([]);
+      btcSeriesRef.current?.setData([]);
+    }
+    applyWindowRange();
+  }, [windowStartSec, windowEndSec, applyWindowRange]);
 
   // ─── Feed BTC candles ──────────────────────────────────────────────────
   useEffect(() => {
     const series = btcSeriesRef.current;
-    if (!series || candles.length === 0) { series?.setData([]); return; }
+    if (!series) return;
+    if (candles.length === 0) { series.setData([]); return; }
 
     const first = candles[0].close;
     const last  = candles[candles.length - 1].close;
@@ -264,20 +293,41 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     });
     series.setData(candles.map((c) => ({ time: c.time as Time, value: c.close })));
     latestCandleTimeRef.current = candles[candles.length - 1].time;
-    chartRef.current?.timeScale().scrollToRealTime();
+    applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
-  }, [candles, updatePositions]);
+  }, [candles, updatePositions, applyWindowRange]);
 
-  // ─── Feed probability data ─────────────────────────────────────────────
+  // ─── Feed probability data (incremental — never rewrite full history) ──
   useEffect(() => {
     const series = probSeriesRef.current;
     if (!series) return;
-    if (probData.length === 0) { series.setData([]); return; }
-    series.setData(probData.map((p) => ({ time: p.time as Time, value: p.value })));
+
+    if (probData.length === 0) {
+      if (probDataLenRef.current !== 0) {
+        series.setData([]);
+        probDataLenRef.current = 0;
+      }
+      return;
+    }
+
+    const prevLen = probDataLenRef.current;
+    if (probData.length < prevLen) {
+      series.setData(probData.map((p) => ({ time: p.time as Time, value: p.value })));
+    } else if (probData.length === prevLen && prevLen > 0) {
+      const last = probData[probData.length - 1];
+      series.update({ time: last.time as Time, value: last.value });
+    } else {
+      for (let i = Math.max(0, prevLen); i < probData.length; i++) {
+        const p = probData[i];
+        series.update({ time: p.time as Time, value: p.value });
+      }
+    }
+
+    probDataLenRef.current = probData.length;
     latestProbTimeRef.current = probData[probData.length - 1].time;
-    chartRef.current?.timeScale().scrollToRealTime();
+    applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
-  }, [probData, updatePositions]);
+  }, [probData, updatePositions, applyWindowRange]);
 
   // ─── Update currentProb ref and positions on prob data change ──────────
   useEffect(() => {
@@ -349,7 +399,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
 
   // ─── Derived ──────────────────────────────────────────────────────────
   const currentProb = probData.length > 0 ? probData[probData.length - 1].value : 50;
-  const isWinning   = currentProb > 50;
+  const isWinning   = direction === "above" ? currentProb > 50 : currentProb < 50;
   const urgency     = windowMsRemaining < 30_000  ? "critical"
                     : windowMsRemaining < 120_000 ? "warning"
                     : "normal";
@@ -545,7 +595,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
             color:      view === "btc" ? "#f7931a" : "#3a3a3a",
           }}
         >
-          BTC PRICE
+          {asset} PRICE
         </button>
       </div>
 

@@ -7,26 +7,46 @@ export interface WindowProbTick {
   spot_price: number;
 }
 
-export type ProbPoint = { time: number; value: number };
-
-export function ticksToChartPoints(ticks: WindowProbTick[], direction: Direction): ProbPoint[] {
-  return ticks.map((t) => ({
-    time:  t.time_sec,
-    value: (direction === "above" ? t.prob_above : 1 - t.prob_above) * 100,
-  }));
+/** Client tick — chart Y is frozen at ingest, never remapped. */
+export interface ClientProbTick extends WindowProbTick {
+  chartValue: number;
 }
 
-/** Merge a tick into the sorted series (replace same second). */
+export type ProbPoint = { time: number; value: number };
+
+export function tickChartValue(probAbove: number, direction: Direction): number {
+  const p = direction === "above" ? probAbove : 1 - probAbove;
+  return Math.round(p * 1000) / 10;
+}
+
+export function ingestTicks(raw: WindowProbTick[], direction: Direction): ClientProbTick[] {
+  return raw
+    .map((t) => ({
+      ...t,
+      chartValue: tickChartValue(t.prob_above, direction),
+    }))
+    .sort((a, b) => a.time_sec - b.time_sec);
+}
+
+export function ticksToChartPoints(ticks: ClientProbTick[]): ProbPoint[] {
+  return ticks.map((t) => ({ time: t.time_sec, value: t.chartValue }));
+}
+
+/** Merge a tick; chartValue is locked using direction at ingest time only. */
 export function mergeTick(
-  ticks: WindowProbTick[],
-  incoming: WindowProbTick
-): WindowProbTick[] {
+  ticks: ClientProbTick[],
+  incoming: WindowProbTick,
+  direction: Direction
+): ClientProbTick[] {
+  const enriched: ClientProbTick = {
+    ...incoming,
+    chartValue: tickChartValue(incoming.prob_above, direction),
+  };
   const idx = ticks.findIndex((t) => t.time_sec === incoming.time_sec);
   if (idx >= 0) {
     const next = [...ticks];
-    next[idx] = incoming;
+    next[idx] = enriched;
     return next;
   }
-  const next = [...ticks, incoming].sort((a, b) => a.time_sec - b.time_sec);
-  return next;
+  return [...ticks, enriched].sort((a, b) => a.time_sec - b.time_sec);
 }

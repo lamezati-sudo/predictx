@@ -8,6 +8,7 @@ import {
   createPriceStream,
   fetchWindowCandles,
   getWindowStart,
+  getWindowEnd,
   msToWindowEnd,
 } from "@/lib/prices";
 import { calcDirectionProb, defaultProbLevels } from "@/lib/probability";
@@ -216,6 +217,9 @@ export function TradingWorkspace() {
     if (lv) syncLevelsToActive(lv, undefined, qty);
   }, [setSlQty, syncLevelsToActive]);
 
+  const windowStartSec = Math.floor(getWindowStart(timeframe) / 1000);
+  const windowEndSec   = Math.floor(getWindowEnd(timeframe) / 1000);
+
   return (
     <div className="relative h-full w-full">
       {loading && (
@@ -240,6 +244,8 @@ export function TradingWorkspace() {
         probData={probData}
         currentPrice={currentPrice}
         targetPrice={targetPrice}
+        windowStartSec={windowStartSec}
+        windowEndSec={windowEndSec}
         windowMsRemaining={windowMs}
         levels={levels}
         direction={direction}
