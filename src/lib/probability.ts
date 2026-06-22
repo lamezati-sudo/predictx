@@ -1,22 +1,26 @@
 /**
- * Probability model — Robinhood-style: stays in the lively middle range and
- * reacts to every tick, instead of pegging to 0¢/100¢ and freezing.
+ * Probability model — lively & sensitive: the line dances with every small
+ * price tick and never freezes pegged at the 0¢/100¢ rails.
  *
- * Formula:  z = K * delta * timeBoost,   P = sigmoid(z)
+ * Formula:  z = K * delta * timeBoost,   P = clamp(sigmoid(z), 0.02, 0.98)
  *   delta     = (current − target) / target           (price gap, %)
- *   timeBoost = 1 / timeRatio^0.35                      (sharper near expiry)
+ *   timeBoost = min(BOOST_MAX, 1 / timeRatio^0.22)     (gently sharper near expiry)
  *
- * Calibration (BTC ≈ $64k, window start, timeBoost = 1):
- *   • $500 up  (0.78%) → z ≈ 3.12 → ~96¢   ← matches user spec
- *   • $300 up  (0.47%) → z ≈ 1.87 → ~87¢
- *   • $100 up  (0.16%) → z ≈ 0.62 → ~65¢
- *   • $30  up  (0.05%) → z ≈ 0.19 → ~55¢   ← small ticks still move the line
+ * Sensitivity (BTC ≈ $100k, window start, timeBoost = 1, K = 2200):
+ *   • $5   up (0.005%) → z ≈ 0.11 → ~53¢   ← small ticks visibly move the line
+ *   • $20  up (0.02%)  → z ≈ 0.44 → ~61¢
+ *   • $50  up (0.05%)  → z ≈ 1.10 → ~75¢
+ *   • $150 up (0.15%)  → z ≈ 3.30 → ~96¢
  *
- * Because K is moderate (not 1200), a $200 lead does NOT instantly peg to
- * 100¢ — the line keeps fluctuating, which is what makes it tradeable.
- * timeBoost then sharpens the curve toward expiry (a lead late = more certain).
+ * The 2¢–98¢ clamp guarantees there is always headroom for the line to react,
+ * so even a strong late lead keeps nudging instead of flatlining at the rail.
+ * timeBoost is softened (0.22 exp) and capped (BOOST_MAX) so approaching expiry
+ * sharpens the curve without slamming z into saturation.
  */
-const K = 400;
+const K          = 2200;
+const BOOST_MAX  = 2.2;
+const PROB_FLOOR = 0.02;
+const PROB_CEIL  = 0.98;
 
 export function calcPAbove(
   currentPrice: number,
@@ -27,9 +31,10 @@ export function calcPAbove(
   if (targetPrice <= 0 || currentPrice <= 0) return 0.5;
   const delta     = (currentPrice - targetPrice) / targetPrice;
   const timeRatio = Math.max(0.02, msRemaining / totalWindowMs);
-  const timeBoost = 1 / Math.pow(timeRatio, 0.35);
+  const timeBoost = Math.min(BOOST_MAX, 1 / Math.pow(timeRatio, 0.22));
   const z         = Math.max(-8, Math.min(8, K * delta * timeBoost));
-  return 1 / (1 + Math.exp(-z));
+  const p         = 1 / (1 + Math.exp(-z));
+  return Math.max(PROB_FLOOR, Math.min(PROB_CEIL, p));
 }
 
 /** Probability that the user's chosen direction wins. */
