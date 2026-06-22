@@ -1,0 +1,16 @@
+# Fly.io — PredictX market worker (24/7 Binance feed + Realtime broadcast)
+# Deploy: fly deploy --config fly.toml
+# Docs: https://fly.io/docs/launch/
+
+app = 'predictx-worker'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'Dockerfile.worker'
+
+# No http_service — background worker only (no public port).
+
+[[vm]]
+  memory = '256mb'
+  cpu_kind = 'shared'
+  cpus = 1

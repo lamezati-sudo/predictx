@@ -1,0 +1,11 @@
+# Worker image only needs worker + shared lib — skip Next.js app bulk
+.git
+.vercel
+.next
+node_modules
+.env*
+!.env.local.example
+*.md
+.gh-auth-output.txt
+agent-tools
+terminals

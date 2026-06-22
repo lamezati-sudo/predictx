@@ -1,6 +1,6 @@
 # Deploy PredictX
 
-Two parts: **Vercel** (website + settlement cron) and **Render** (market worker).
+Three parts: **Vercel** (website), **[cron-job.org](https://cron-job.org/en/)** (settlement), **Fly.io** (market worker).
 
 ---
 
@@ -62,7 +62,7 @@ git push -u origin main
    - `NEXT_PUBLIC_SITE_URL` in Vercel env → redeploy
    - Supabase → **Auth → URL Configuration** → Site URL + Redirect URLs
 
-> **Cron:** `vercel.json` runs `/api/cron/settle` every minute. Requires Vercel **Pro** for production crons on some plans; Hobby may limit cron. Check your plan.
+> **Settlement:** Use [cron-job.org](https://cron-job.org/en/) (free, 1/min) — see section 3 below. Vercel Hobby cannot run minute-level crons.
 
 ### CLI alternative
 
@@ -76,36 +76,78 @@ npx vercel deploy --prod
 
 ---
 
-## 3. Deploy market worker → Render
+## 3. Settlement cron → cron-job.org (free)
 
-The worker must run 24/7 (Vercel cannot do this).
+Vercel Hobby blocks `* * * * *` crons. Use [cron-job.org](https://cron-job.org/en/) instead:
 
-1. Go to [dashboard.render.com](https://dashboard.render.com) → **New → Blueprint**.
-2. Connect the same GitHub repo.
-3. Render reads `render.yaml` and creates **predictx-worker**.
-4. Set env vars when prompted:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-5. Deploy. Logs should show:
-   ```
-   PredictX market worker starting…
-   [window] BTC 15m → …
-   [flush] 9 ticks persisted
-   ```
+| Field | Value |
+|---|---|
+| **URL** | `https://predictx-drab.vercel.app/api/cron/settle` |
+| **Method** | GET |
+| **Schedule** | Every 1 minute |
+| **Header** | `Authorization: Bearer <CRON_SECRET>` |
 
-### Railway alternative
+Test run should return `200` with `{"ok":true,...}`.
+
+---
+
+## 4. Deploy market worker → Fly.io (free tier)
+
+The worker must run 24/7 for the live graph (Vercel cannot do this).
+
+### One-time setup
 
 ```bash
-npm i -g @railway/cli
-railway login
-railway init
-railway variables set NEXT_PUBLIC_SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...
-railway up --dockerfile Dockerfile.worker
+# Install Fly CLI (Windows PowerShell)
+powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
+
+fly auth login
+fly apps create predictx-worker   # skip if name taken — pick another in fly.toml
+```
+
+### Set secrets (from `.env.local`)
+
+```bash
+fly secrets set \
+  NEXT_PUBLIC_SUPABASE_URL=https://eirszcqeypzdejfdrlbg.supabase.co \
+  SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+Do **not** set `CRON_SECRET` / `SITE_URL` on Fly — settlement is handled by cron-job.org.
+
+### Deploy
+
+```bash
+fly deploy --config fly.toml
+fly logs
+```
+
+Logs should show:
+
+```
+PredictX market worker starting…
+CRON_SECRET or SITE_URL missing — expiry settlement disabled
+Broadcast 1 Hz · DB flush every 15s
+[flush] 9 ticks persisted
+```
+
+### Fly.io free tier notes
+
+- `shared-cpu-1x` + 256MB fits the worker on the free allowance.
+- App stays running 24/7 (unlike Render free web services).
+- Region `iad` (Virginia) is close to Vercel + Binance US.
+
+### Render alternative (paid ~$7/mo)
+
+See `render.yaml` — background workers require Render **Starter** plan.
+
+```bash
+# Blueprint: https://dashboard.render.com/blueprint/new?repo=https://github.com/lamezati-sudo/predictx
 ```
 
 ---
 
-## 4. Verify production
+## 5. Verify production
 
 - [ ] App loads at Vercel URL, login works
 - [ ] Graph updates live (worker running)
@@ -118,10 +160,10 @@ railway up --dockerfile Dockerfile.worker
 ## Architecture (production)
 
 ```
-Binance WS ──► Render Worker ──► Realtime Broadcast ──► all users' browsers
+Binance WS ──► Fly.io Worker ──► Realtime Broadcast ──► all users' browsers
                     │
                     └── DB flush every 15s (Supabase)
 
 Users ──► Vercel (Next.js) ──► Supabase (auth, trades, profiles)
-Vercel Cron ──► /api/cron/settle ──► settle expired windows
+cron-job.org ──► /api/cron/settle (every 1 min) ──► settle expired windows
 ```
