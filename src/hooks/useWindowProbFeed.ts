@@ -6,6 +6,7 @@ import {
   ingestTicks,
   mergeTick,
   ticksToChartPoints,
+  ticksToPricePoints,
   type ClientProbTick,
   type ProbPoint,
   type WindowProbTick,
@@ -25,8 +26,9 @@ export function useWindowProbFeed(
   windowId: string | null,
   direction: Direction
 ) {
-  const [probData, setProbData] = useState<ProbPoint[]>([]);
-  const ticksRef                = useRef<ClientProbTick[]>([]);
+  const [probData, setProbData]   = useState<ProbPoint[]>([]);
+  const [priceData, setPriceData] = useState<ProbPoint[]>([]);
+  const ticksRef                  = useRef<ClientProbTick[]>([]);
   const directionRef            = useRef(direction);
   directionRef.current          = direction;
   // Which window the ticks currently in state belong to — lets us skip the
@@ -37,6 +39,7 @@ export function useWindowProbFeed(
   const applyChart = useCallback((raw: ClientProbTick[]) => {
     ticksRef.current = raw;
     setProbData(ticksToChartPoints(raw));
+    setPriceData(ticksToPricePoints(raw));
   }, []);
 
   const applyOne = useCallback((incoming: WindowProbTick) => {
@@ -49,6 +52,7 @@ export function useWindowProbFeed(
     if (dataWindowRef.current === windowId) return;
     ticksRef.current = [];
     setProbData([]);
+    setPriceData([]);
   }, [windowId]);
 
   useEffect(() => {
@@ -99,5 +103,5 @@ export function useWindowProbFeed(
     applyChart(ingestTicks(raw, directionRef.current));
   }, [applyChart]);
 
-  return { probData, loadTicks };
+  return { probData, priceData, loadTicks };
 }
