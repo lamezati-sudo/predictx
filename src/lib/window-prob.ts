@@ -32,6 +32,13 @@ export function ticksToChartPoints(ticks: ClientProbTick[]): ProbPoint[] {
   return ticks.map((t) => ({ time: t.time_sec, value: t.chartValue }));
 }
 
+/** Spot-price series from the same continuous tick feed (for the price view). */
+export function ticksToPricePoints(ticks: ClientProbTick[]): ProbPoint[] {
+  return ticks
+    .filter((t) => t.spot_price > 0)
+    .map((t) => ({ time: t.time_sec, value: t.spot_price }));
+}
+
 /** Merge a tick; chartValue is locked using direction at ingest time only. */
 export function mergeTick(
   ticks: ClientProbTick[],

@@ -13,7 +13,7 @@ import {
 } from "@/lib/prices";
 import { calcDirectionProb, defaultProbLevels } from "@/lib/probability";
 import type { WindowProbTick } from "@/lib/window-prob";
-import type { Candle, Timeframe } from "@/types";
+import type { Timeframe } from "@/types";
 import { TIMEFRAME_MS } from "@/types";
 
 type Asset = import("@/types").Asset;
@@ -39,9 +39,8 @@ export function TradingWorkspace() {
   const currentPrice    = useGameStore((s) => s.currentPrice);
   const currentProb     = useGameStore((s) => s.currentProb);
 
-  const { probData, loadTicks } = useWindowProbFeed(windowId, direction);
+  const { probData, priceData, loadTicks } = useWindowProbFeed(windowId, direction);
 
-  const [candles,  setCandles]  = useState<Candle[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
   const [windowMs, setWindowMs] = useState(0);
@@ -60,7 +59,6 @@ export function TradingWorkspace() {
     async (asset: Asset, tf: Timeframe, windowStart: number) => {
       setLoading(true);
       setError(null);
-      setCandles([]);
       try {
         const [candles, winRes] = await Promise.all([
           fetchWindowCandles(asset, tf),
@@ -76,7 +74,6 @@ export function TradingWorkspace() {
         const target = Number(win.target_price);
         const endMs  = new Date(win.window_end).getTime();
 
-        setCandles(candles);
         setWindow(win.id, target, endMs);
         targetRef.current = target;
         loadTicks(ticks ?? [], win.id);
@@ -140,16 +137,9 @@ export function TradingWorkspace() {
 
     const cleanup = createPriceStream(
       asset,
-      (candle) => {
-        const wStart = currentWindowRef.current / 1000;
-        setCandles((prev) => {
-          const filtered = prev.filter((c) => c.time >= wStart);
-          if (filtered.length === 0) return [candle];
-          const last = filtered[filtered.length - 1];
-          return last.time === candle.time
-            ? [...filtered.slice(0, -1), candle]
-            : [...filtered, candle];
-        });
+      () => {
+        // Price chart is driven by the worker spot-price tick feed, not local
+        // klines — no per-candle state needed here.
       },
       (price) => {
         lastPriceRef.current = price;
@@ -240,7 +230,7 @@ export function TradingWorkspace() {
         ref={chartRef}
         asset={asset}
         timeframe={timeframe}
-        candles={candles}
+        priceData={priceData}
         probData={probData}
         currentPrice={currentPrice}
         targetPrice={targetPrice}
