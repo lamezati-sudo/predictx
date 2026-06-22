@@ -158,8 +158,6 @@ export function TradingWorkspace() {
         const prob   = target > 0
           ? calcDirectionProb(directionRef.current, price, target, ms, TIMEFRAME_MS[timeframe])
           : 0.5;
-        const timeSec = Math.floor(Date.now() / 1000);
-        chartRef.current?.updateLiveProb(prob, timeSec);
 
         const now = Date.now();
         if (now - lastStoreTickRef.current >= STORE_INTERVAL_MS) {

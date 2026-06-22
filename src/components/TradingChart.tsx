@@ -152,21 +152,9 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       if (btcSeries) btcSeries.update({ time: t as Time, value: price });
       requestAnimationFrame(updatePositions);
     },
-    updateLiveProb: (prob: number, timeSeconds: number) => {
-      const series = probSeriesRef.current;
-      if (!series) return;
-      const t = timeSeconds || latestProbTimeRef.current;
-      if (t === 0) return;
-      currentProbRef.current = prob;
-      const point = { time: t as Time, value: prob * 100 };
-      if (probDataLenRef.current === 0) {
-        series.setData([point]);
-        probDataLenRef.current = 1;
-        latestProbTimeRef.current = t;
-      } else {
-        series.update(point);
-      }
-      requestAnimationFrame(updatePositions);
+    updateLiveProb: (_prob: number, _timeSeconds: number) => {
+      // Chart prob series is driven only by probData (worker feed) to avoid
+      // out-of-order lightweight-charts updates. LIVE overlay uses storeProb.
     },
   }), [updatePositions]);
 
@@ -283,6 +271,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     if (changed) {
       windowRangeRef.current = { start: windowStartSec, end: windowEndSec };
       probDataLenRef.current = 0;
+      latestProbTimeRef.current = 0;
       probSeriesRef.current?.setData([]);
       btcSeriesRef.current?.setData([]);
     }
@@ -309,7 +298,7 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
   }, [candles, updatePositions, applyWindowRange]);
 
-  // ─── Feed probability data (incremental — never rewrite full history) ──
+  // ─── Feed probability data (setData only — preserves frozen history) ───
   useEffect(() => {
     const series = probSeriesRef.current;
     if (!series) return;
@@ -318,26 +307,16 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       if (probDataLenRef.current !== 0) {
         series.setData([]);
         probDataLenRef.current = 0;
+        latestProbTimeRef.current = 0;
       }
       return;
     }
 
-    const prevLen = probDataLenRef.current;
     const points = probData.map((p) => ({ time: p.time as Time, value: p.value }));
-
-    // Initial load or window reset → must use setData (update on empty series throws)
-    if (prevLen === 0 || probData.length < prevLen) {
-      series.setData(points);
-    } else if (probData.length === prevLen) {
-      series.update(points[points.length - 1]);
-    } else {
-      for (let i = prevLen; i < points.length; i++) {
-        series.update(points[i]);
-      }
-    }
-
+    series.setData(points);
     probDataLenRef.current = probData.length;
     latestProbTimeRef.current = probData[probData.length - 1].time;
+    currentProbRef.current = probData[probData.length - 1].value / 100;
     applyWindowRange();
     requestAnimationFrame(() => requestAnimationFrame(updatePositions));
   }, [probData, updatePositions, applyWindowRange]);
@@ -349,6 +328,14 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       requestAnimationFrame(updatePositions);
     }
   }, [probData, updatePositions]);
+
+  // Smooth LIVE overlay between worker ticks (chart series stays 1Hz from feed)
+  useEffect(() => {
+    if (storeProb > 0) {
+      currentProbRef.current = storeProb;
+      requestAnimationFrame(updatePositions);
+    }
+  }, [storeProb, updatePositions]);
 
   // ─── Live price / levels update ────────────────────────────────────────
   useEffect(() => {
@@ -411,7 +398,11 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   };
 
   // ─── Derived ──────────────────────────────────────────────────────────
-  const currentProb = probData.length > 0 ? probData[probData.length - 1].value : 50;
+  const currentProb = storeProb > 0
+    ? storeProb * 100
+    : probData.length > 0
+      ? probData[probData.length - 1].value
+      : 50;
   const isWinning   = direction === "above" ? currentProb > 50 : currentProb < 50;
   const urgency     = windowMsRemaining < 30_000  ? "critical"
                     : windowMsRemaining < 120_000 ? "warning"
