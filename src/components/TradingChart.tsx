@@ -100,10 +100,15 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
   const applyWindowRange = useCallback(() => {
     const chart = chartRef.current;
     if (!chart || windowStartSec <= 0 || windowEndSec <= 0) return;
-    chart.timeScale().setVisibleRange({
-      from: windowStartSec as Time,
-      to:   windowEndSec as Time,
-    });
+    if (windowEndSec <= windowStartSec) return;
+    try {
+      chart.timeScale().setVisibleRange({
+        from: windowStartSec as Time,
+        to:   windowEndSec as Time,
+      });
+    } catch {
+      // Chart may not be ready yet — ignore
+    }
   }, [windowStartSec, windowEndSec]);
 
   // ─── Sync overlay Y positions ─────────────────────────────────────────
@@ -153,7 +158,14 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
       const t = timeSeconds || latestProbTimeRef.current;
       if (t === 0) return;
       currentProbRef.current = prob;
-      series.update({ time: t as Time, value: prob * 100 });
+      const point = { time: t as Time, value: prob * 100 };
+      if (probDataLenRef.current === 0) {
+        series.setData([point]);
+        probDataLenRef.current = 1;
+        latestProbTimeRef.current = t;
+      } else {
+        series.update(point);
+      }
       requestAnimationFrame(updatePositions);
     },
   }), [updatePositions]);
@@ -311,15 +323,16 @@ export const TradingChart = forwardRef<TradingChartHandle, Props>(function Tradi
     }
 
     const prevLen = probDataLenRef.current;
-    if (probData.length < prevLen) {
-      series.setData(probData.map((p) => ({ time: p.time as Time, value: p.value })));
-    } else if (probData.length === prevLen && prevLen > 0) {
-      const last = probData[probData.length - 1];
-      series.update({ time: last.time as Time, value: last.value });
+    const points = probData.map((p) => ({ time: p.time as Time, value: p.value }));
+
+    // Initial load or window reset → must use setData (update on empty series throws)
+    if (prevLen === 0 || probData.length < prevLen) {
+      series.setData(points);
+    } else if (probData.length === prevLen) {
+      series.update(points[points.length - 1]);
     } else {
-      for (let i = Math.max(0, prevLen); i < probData.length; i++) {
-        const p = probData[i];
-        series.update({ time: p.time as Time, value: p.value });
+      for (let i = prevLen; i < points.length; i++) {
+        series.update(points[i]);
       }
     }
 
