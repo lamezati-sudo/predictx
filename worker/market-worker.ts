@@ -16,7 +16,7 @@ import { TIMEFRAME_MS, type Asset, type Timeframe } from "../src/types";
 
 // ── Config ───────────────────────────────────────────────────────────────────
 const ASSETS: Asset[] = ["BTC", "ETH", "SOL"];
-const TIMEFRAMES: Timeframe[] = ["15m", "1h", "2h"];
+const TIMEFRAMES: Timeframe[] = ["5m", "15m", "1h", "1d"];
 const SYMBOL: Record<Asset, string> = { BTC: "btcusdt", ETH: "ethusdt", SOL: "solusdt" };
 const BROADCAST_MS = 1000;  // live push rate (WebSocket — not REST)
 const FLUSH_MS     = 15000; // DB snapshot interval
@@ -75,8 +75,8 @@ async function binanceGet(path: string): Promise<unknown> {
 
 async function fetchTarget(asset: Asset, tf: Timeframe): Promise<number> {
   const sym = SYMBOL[asset].toUpperCase();
-  const interval = tf === "15m" ? "15m" : tf === "1h" ? "1h" : "2h";
-  const data = (await binanceGet(`/klines?symbol=${sym}&interval=${interval}&limit=2`)) as unknown[][];
+  // tf ("5m" | "15m" | "1h" | "1d") maps directly to a Binance interval.
+  const data = (await binanceGet(`/klines?symbol=${sym}&interval=${tf}&limit=2`)) as unknown[][];
   return parseFloat(data[0][4] as string);
 }
 

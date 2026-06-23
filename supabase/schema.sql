@@ -61,7 +61,7 @@ create trigger on_auth_user_created
 create table if not exists public.windows (
   id           uuid primary key default gen_random_uuid(),
   asset        text        not null,              -- 'BTC' | 'ETH' | 'SOL'
-  timeframe    text        not null,              -- '15m' | '1h' | '2h'
+  timeframe    text        not null,              -- '5m' | '15m' | '1h' | '1d'
   window_start timestamptz not null,
   window_end   timestamptz not null,
   target_price numeric(18,8) not null,
@@ -92,20 +92,22 @@ create table if not exists public.predictions (
   window_id    uuid not null references public.windows (id) on delete cascade,
   asset        text not null,
   timeframe    text not null,
-  direction    text not null,                      -- 'above' | 'below'
-  entry_price  numeric(18,8) not null,
-  target_price numeric(18,8) not null,
-  entry_prob   numeric(6,5)  not null,             -- 0–1
-  tp_prob      numeric(6,5)  not null,
-  sl_prob      numeric(6,5)  not null,
-  tp_qty       integer       not null default 100, -- % of stake to close at TP
+  direction    text not null,                      -- 'above' (UP) | 'below' (DOWN)
+  entry_price  numeric(18,8) not null,             -- asset price at open
+  target_price numeric(18,8) not null,             -- "price to beat"
+  tp_price     numeric(18,8),                       -- take-profit price level
+  sl_price     numeric(18,8),                       -- stop-loss price level
+  entry_prob   numeric(6,5),                        -- legacy (unused, nullable)
+  tp_prob      numeric(6,5),                        -- legacy (unused, nullable)
+  sl_prob      numeric(6,5),                        -- legacy (unused, nullable)
+  tp_qty       integer       not null default 100, -- % of position to close at TP
   sl_qty       integer       not null default 100,
   stake        numeric(14,2) not null,
   status       text not null default 'active',     -- active|won|lost|taken|stopped
   pnl          numeric(14,2),
   exit_price   numeric(18,8),
-  exit_prob    numeric(6,5),
-  exit_reason  text,                               -- 'tp'|'sl'|'expiry'
+  exit_prob    numeric(6,5),                        -- legacy (unused, nullable)
+  exit_reason  text,                               -- 'tp'|'sl'|'expiry'|'manual'
   opened_at    timestamptz not null default now(),
   expires_at   timestamptz not null,
   settled_at   timestamptz
@@ -133,6 +135,10 @@ create index if not exists predictions_window_idx
 --  place_prediction — atomic RPC: debit balance + insert prediction.
 --  Called by the server with the user's id. Raises if balance insufficient.
 -- ════════════════════════════════════════════════════════════════════════
+drop function if exists public.place_prediction(
+  uuid, uuid, text, text, text, numeric, numeric, numeric, numeric, numeric, integer, integer, numeric, timestamptz
+);
+
 create or replace function public.place_prediction(
   p_user_id      uuid,
   p_window_id    uuid,
@@ -141,9 +147,8 @@ create or replace function public.place_prediction(
   p_direction    text,
   p_entry_price  numeric,
   p_target_price numeric,
-  p_entry_prob   numeric,
-  p_tp_prob      numeric,
-  p_sl_prob      numeric,
+  p_tp_price     numeric,
+  p_sl_price     numeric,
   p_tp_qty       integer,
   p_sl_qty       integer,
   p_stake        numeric,
@@ -177,10 +182,10 @@ begin
 
   insert into public.predictions (
     user_id, window_id, asset, timeframe, direction, entry_price, target_price,
-    entry_prob, tp_prob, sl_prob, tp_qty, sl_qty, stake, expires_at
+    tp_price, sl_price, tp_qty, sl_qty, stake, expires_at
   ) values (
     p_user_id, p_window_id, p_asset, p_timeframe, p_direction, p_entry_price, p_target_price,
-    p_entry_prob, p_tp_prob, p_sl_prob, p_tp_qty, p_sl_qty, p_stake, p_expires_at
+    p_tp_price, p_sl_price, p_tp_qty, p_sl_qty, p_stake, p_expires_at
   ) returning * into v_pred;
 
   return v_pred;

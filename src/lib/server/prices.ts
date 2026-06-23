@@ -32,8 +32,9 @@ export function windowBounds(tf: Timeframe, at = Date.now()) {
  */
 export async function fetchTargetPrice(asset: Asset, tf: Timeframe): Promise<number> {
   const symbol = assetSymbol(asset);
+  // tf values ("5m" | "15m" | "1h" | "1d") map directly to Binance intervals.
   const data = (await binanceFetch(
-    `/klines?symbol=${symbol}&interval=${tf === "15m" ? "15m" : tf === "1h" ? "1h" : "2h"}&limit=2`
+    `/klines?symbol=${symbol}&interval=${tf}&limit=2`
   )) as unknown[][];
   return parseFloat(data[0][4] as string);
 }

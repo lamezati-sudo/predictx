@@ -49,33 +49,40 @@ export function calcDirectionProb(
   return direction === "above" ? p : 1 - p;
 }
 
+import type { Direction, PriceLevels } from "@/types";
+
 /**
- * Default TP/SL levels span the full range (1¢ – 99¢).
- * Entry is set to the current probability.
- * Users drag them tighter if they want early exits.
+ * Default TP/SL price levels around the entry price.
+ * UP  → TP above entry, SL below entry.
+ * DOWN→ TP below entry, SL above entry.
+ * Users drag them to taste; TP can be dragged down to entry (= $0 profit).
  */
-export function defaultProbLevels(entryProb: number): {
-  entry:      number;
-  takeProfit: number;
-  stopLoss:   number;
-} {
-  return {
-    entry:      entryProb,
-    takeProfit: 0.99,
-    stopLoss:   0.01,
-  };
+export function defaultPriceLevels(
+  entryPrice: number,
+  direction: Direction
+): PriceLevels {
+  const gap = entryPrice * 0.003; // ~0.3% default band
+  if (direction === "above") {
+    return { entry: entryPrice, takeProfit: entryPrice + gap, stopLoss: entryPrice - gap };
+  }
+  return { entry: entryPrice, takeProfit: entryPrice - gap, stopLoss: entryPrice + gap };
 }
 
 /**
- * Mark-to-market PnL (prediction market model):
- *   Bought at P, current value is exitProb per unit of stake.
- *   PnL = stake * (exitProb − entryProb) / entryProb
+ * Linear, no-leverage price P&L (directional position):
+ *   UP   profit when price rises above entry.
+ *   DOWN profit when price falls below entry.
+ *   PnL = stake * (exit − entry) / entry        (above)
+ *   PnL = stake * (entry − exit) / entry        (below)
+ * At the entry price the P&L is exactly $0.
  */
-export function calcPnl(
+export function calcLinearPnl(
   stake: number,
-  entryProb: number,
-  exitProb: number
+  entryPrice: number,
+  exitPrice: number,
+  direction: Direction
 ): number {
-  if (entryProb <= 0) return 0;
-  return stake * (exitProb - entryProb) / entryProb;
+  if (entryPrice <= 0) return 0;
+  const move = (exitPrice - entryPrice) / entryPrice;
+  return stake * (direction === "above" ? move : -move);
 }

@@ -13,15 +13,15 @@ export async function PATCH(request: NextRequest) {
 
   let body: {
     predictionId?: string;
-    tpProb?: number;
-    slProb?: number;
+    tpPrice?: number;
+    slPrice?: number;
     tpQty?: number;
     slQty?: number;
   };
   try { body = await request.json(); }
   catch { return NextResponse.json({ error: "bad json" }, { status: 400 }); }
 
-  const { predictionId, tpProb, slProb, tpQty, slQty } = body;
+  const { predictionId, tpPrice, slPrice, tpQty, slQty } = body;
   if (!predictionId) return NextResponse.json({ error: "predictionId required" }, { status: 400 });
 
   const admin = createAdminClient();
@@ -31,20 +31,24 @@ export async function PATCH(request: NextRequest) {
   if (pred.user_id !== user.id) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   if (pred.status !== "active") return NextResponse.json({ error: "not active" }, { status: 409 });
 
-  const entry = Number(pred.entry_prob);
-  const tp    = clampProb(tpProb ?? Number(pred.tp_prob));
-  const sl    = clampProb(slProb ?? Number(pred.sl_prob));
+  const entry = Number(pred.entry_price);
+  const tp    = tpPrice ?? Number(pred.tp_price);
+  const sl    = slPrice ?? Number(pred.sl_price);
 
-  if (!(tp > entry && sl < entry)) {
+  // UP: TP ≥ entry, SL ≤ entry.  DOWN: TP ≤ entry, SL ≥ entry.
+  const valid = pred.direction === "above"
+    ? tp >= entry && sl <= entry
+    : tp <= entry && sl >= entry;
+  if (!valid) {
     return NextResponse.json(
-      { error: "TP must be above entry and SL below entry" },
+      { error: "TP/SL on the wrong side of the entry price" },
       { status: 400 }
     );
   }
 
   const patch: Record<string, number> = {
-    tp_prob: round5(tp),
-    sl_prob: round5(sl),
+    tp_price: round8(tp),
+    sl_price: round8(sl),
   };
   if (tpQty != null) patch.tp_qty = clampQty(tpQty);
   if (slQty != null) patch.sl_qty = clampQty(slQty);
@@ -60,6 +64,5 @@ export async function PATCH(request: NextRequest) {
   return NextResponse.json({ prediction: updated });
 }
 
-function clampProb(v: number) { return Math.max(0.01, Math.min(0.99, v)); }
 function clampQty(v: number)  { return Math.max(1, Math.min(100, Math.round(v))); }
-function round5(v: number)    { return Math.round(v * 1e5) / 1e5; }
+function round8(v: number)    { return Math.round(v * 1e8) / 1e8; }

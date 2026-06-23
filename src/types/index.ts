@@ -1,5 +1,5 @@
 export type Asset = "BTC" | "ETH" | "SOL";
-export type Timeframe = "15m" | "1h" | "2h";
+export type Timeframe = "5m" | "15m" | "1h" | "1d";
 export type Direction = "above" | "below";
 export type PredictionStatus = "active" | "won" | "lost" | "stopped" | "taken";
 
@@ -11,11 +11,11 @@ export interface Candle {
   close: number;
 }
 
-/** Probability-based levels (all values 0–1). */
-export interface ProbLevels {
-  entry:      number; // probability of direction at the moment levels were set
-  takeProfit: number; // exit when directionProb ≥ this
-  stopLoss:   number; // exit when directionProb ≤ this
+/** Price-based levels (all values are USD prices on the asset). */
+export interface PriceLevels {
+  entry:      number; // asset price at the moment the position was opened
+  takeProfit: number; // exit when price reaches this (above entry for UP, below for DOWN)
+  stopLoss:   number; // exit when price reaches this (below entry for UP, above for DOWN)
 }
 
 export interface ActivePrediction {
@@ -25,9 +25,8 @@ export interface ActivePrediction {
   direction:  Direction;
   entryPrice: number;
   targetPrice: number;
-  entryProb:  number;  // 0–1
-  tpProb:     number;  // 0–1 — exit when directionProb ≥ this
-  slProb:     number;  // 0–1 — exit when directionProb ≤ this
+  tpPrice:    number;  // USD price — exit at profit
+  slPrice:    number;  // USD price — exit at loss
   tpQty:      number;  // 1–100 % of stake to close at TP
   slQty:      number;  // 1–100 % of stake to close at SL
   stake:      number;
@@ -36,7 +35,6 @@ export interface ActivePrediction {
   status:     PredictionStatus;
   pnl?:       number;
   exitPrice?: number;
-  exitProb?:  number;
   exitReason?: "tp" | "sl" | "expiry";
 }
 
@@ -47,15 +45,17 @@ export const ASSETS: { id: Asset; symbol: string; name: string; color: string }[
 ];
 
 export const TIMEFRAMES: { id: Timeframe; label: string; minutes: number }[] = [
+  { id: "5m",  label: "5 min",  minutes: 5 },
   { id: "15m", label: "15 min", minutes: 15 },
   { id: "1h",  label: "1 hour", minutes: 60 },
-  { id: "2h",  label: "2 hours", minutes: 120 },
+  { id: "1d",  label: "1 day",  minutes: 1440 },
 ];
 
 export const TIMEFRAME_MS: Record<Timeframe, number> = {
+  "5m":   5 * 60 * 1000,
   "15m": 15 * 60 * 1000,
   "1h":  60 * 60 * 1000,
-  "2h": 120 * 60 * 1000,
+  "1d": 1440 * 60 * 1000,
 };
 
 export function assetSymbol(asset: Asset): string {
