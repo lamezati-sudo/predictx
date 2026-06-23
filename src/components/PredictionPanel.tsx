@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useGameStore } from "@/store/game-store";
-import { calcPnl } from "@/lib/probability";
-import { streakMultiplier } from "@/lib/prediction-engine";
+import { calcLinearPnl } from "@/lib/probability";
+import { formatPrice } from "@/types";
 
 export function PredictionPanel() {
   const direction    = useGameStore((s) => s.direction);
@@ -12,17 +12,14 @@ export function PredictionPanel() {
   const setStake     = useGameStore((s) => s.setStake);
   const levels       = useGameStore((s) => s.levels);
   const balance      = useGameStore((s) => s.balance);
-  const streak       = useGameStore((s) => s.streak);
   const place        = useGameStore((s) => s.placePrediction);
   const asset        = useGameStore((s) => s.asset);
   const timeframe    = useGameStore((s) => s.timeframe);
   const currentPrice = useGameStore((s) => s.currentPrice);
   const targetPrice  = useGameStore((s) => s.targetPrice);
-  const currentProb  = useGameStore((s) => s.currentProb);
   const activePreds  = useGameStore((s) => s.predictions);
   const windowId     = useGameStore((s) => s.windowId);
 
-  // Local input string so user can freely type
   const [stakeInput, setStakeInput] = useState(String(stake));
   const [placing, setPlacing]       = useState(false);
 
@@ -31,7 +28,7 @@ export function PredictionPanel() {
   );
 
   const canPlace = stake <= balance && stake >= 1 && !hasActive &&
-    targetPrice > 0 && !!windowId && !placing;
+    targetPrice > 0 && !!windowId && !!levels && !placing;
 
   async function handlePlace() {
     setPlacing(true);
@@ -39,13 +36,14 @@ export function PredictionPanel() {
     finally { setPlacing(false); }
   }
 
-  const mult   = streakMultiplier(streak);
-  const entryP = levels?.entry ?? currentProb;
+  const entryPrice = levels?.entry ?? currentPrice;
+  const tpPnl = levels ? calcLinearPnl(stake, entryPrice, levels.takeProfit, direction) : 0;
+  const slPnl = levels ? calcLinearPnl(stake, entryPrice, levels.stopLoss,   direction) : 0;
 
-  // Win payout at window close (exit at 0.98)
-  const winPnl = calcPnl(stake, entryP, 0.98) * mult;
+  const isWinning = direction === "above"
+    ? currentPrice > targetPrice
+    : currentPrice > 0 && currentPrice < targetPrice;
 
-  // Price delta from target
   const pctDelta = targetPrice > 0 && currentPrice > 0
     ? ((currentPrice - targetPrice) / targetPrice * 100)
     : null;
@@ -71,28 +69,24 @@ export function PredictionPanel() {
   return (
     <div className="flex h-full flex-col overflow-y-auto text-[#e2e2e2]">
 
-      {/* ── Live probability display ─────────────────────────────── */}
+      {/* ── Live price + price to beat ───────────────────────────── */}
       <div className="border-b border-[#161616] px-4 py-4">
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-[#3a3a3a]">
-          Market odds
+          {asset} price
         </div>
         <div className="flex items-end justify-between">
           <div>
-            <span
-              className="font-mono text-3xl font-bold tabular-nums"
-              style={{ color: currentProb >= 0.5 ? "#00c47a" : "#ff3b5b" }}
-            >
-              {Math.round(currentProb * 100)}¢
+            <span className="font-mono text-3xl font-bold tabular-nums text-white">
+              {currentPrice > 0 ? `$${formatPrice(currentPrice, asset)}` : "—"}
             </span>
-            <div className="mt-0.5 text-[11px] text-[#3a3a3a]">
-              P({direction.toUpperCase()}) — {currentProb >= 0.5 ? "favoured" : "underdog"}
+            <div className="mt-0.5 text-[11px]"
+              style={{ color: isWinning ? "#00c47a" : "#ff3b5b" }}>
+              {isWinning ? "IN money" : "OUT of money"} ({direction === "above" ? "UP" : "DOWN"})
             </div>
           </div>
           <div className="text-right">
             <div className="font-mono text-sm font-bold text-white">
-              ${targetPrice > 0
-                ? targetPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })
-                : "—"}
+              {targetPrice > 0 ? `$${formatPrice(targetPrice, asset)}` : "—"}
             </div>
             {pctDelta !== null && (
               <div className="text-[11px] font-semibold"
@@ -100,58 +94,43 @@ export function PredictionPanel() {
                 {pctDelta >= 0 ? "+" : ""}{pctDelta.toFixed(3)}%
               </div>
             )}
-            <div className="text-[10px] text-[#2a2a2a]">target</div>
+            <div className="text-[10px] text-[#2a2a2a]">price to beat</div>
           </div>
-        </div>
-
-        {/* Probability bar */}
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-[#111]">
-          <div
-            className="h-full rounded-full transition-all duration-500"
-            style={{
-              width: `${Math.round(currentProb * 100)}%`,
-              background: currentProb >= 0.5
-                ? "linear-gradient(to right,#00c47a88,#00c47a)"
-                : "linear-gradient(to right,#ff3b5b,#ff3b5b88)",
-            }}
-          />
-        </div>
-        <div className="mt-1 flex justify-between text-[9px] text-[#2a2a2a]">
-          <span>0¢</span><span>50¢</span><span>100¢</span>
         </div>
       </div>
 
-      {/* ── ABOVE / BELOW ────────────────────────────────────────── */}
+      {/* ── UP / DOWN ────────────────────────────────────────────── */}
       <div className="border-b border-[#161616] px-4 py-4">
         <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-[#3a3a3a]">
-          {asset} will close
+          {asset} will go
         </div>
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => setDir("above")}
-            className="rounded-lg py-3.5 text-sm font-bold transition-all"
+            disabled={hasActive}
+            className="rounded-lg py-3.5 text-sm font-bold transition-all disabled:opacity-50"
             style={{
               background: direction === "above" ? "#00c47a" : "#0d0d0d",
               color:      direction === "above" ? "#000" : "#444",
               border:     `1px solid ${direction === "above" ? "#00c47a" : "#1c1c1c"}`,
             }}
           >
-            ▲ ABOVE
+            ▲ UP
           </button>
           <button
             onClick={() => setDir("below")}
-            className="rounded-lg py-3.5 text-sm font-bold transition-all"
+            disabled={hasActive}
+            className="rounded-lg py-3.5 text-sm font-bold transition-all disabled:opacity-50"
             style={{
               background: direction === "below" ? "#ff3b5b" : "#0d0d0d",
               color:      direction === "below" ? "#fff" : "#444",
               border:     `1px solid ${direction === "below" ? "#ff3b5b" : "#1c1c1c"}`,
             }}
           >
-            ▼ BELOW
+            ▼ DOWN
           </button>
         </div>
       </div>
-
 
       {/* ── Stake input ───────────────────────────────────────────── */}
       <div className="border-b border-[#161616] px-4 py-4">
@@ -175,34 +154,28 @@ export function PredictionPanel() {
           <p className="text-[10px] text-[#2a2a2a]">
             ${balance.toLocaleString("en-US", { minimumFractionDigits: 2 })} available
           </p>
-          {entryP > 0 && stake >= 1 && (
+          {entryPrice > 0 && (
             <p className="font-mono text-[10px] text-[#444]">
-              ≈ {Math.round(stake / entryP)} contracts @ {Math.round(entryP * 100)}¢
+              entry ≈ ${formatPrice(entryPrice, asset)}
             </p>
           )}
         </div>
 
-        {/* Payout if correct */}
-        {stake >= 1 && entryP > 0 && (
-          <div
-            className="mt-3 flex items-center justify-between rounded-lg border px-4 py-3"
-            style={{
-              background: "rgba(0,196,122,0.05)",
-              borderColor: "rgba(0,196,122,0.15)",
-            }}
-          >
-            <div>
-              <div className="text-[11px] text-[#555]">You receive if correct</div>
-              {streak >= 3 && (
-                <div className="text-[10px] text-[#f0b90b]">🔥 {mult}× streak bonus</div>
-              )}
-            </div>
-            <div className="text-right">
-              <div className="font-mono text-xl font-bold text-[#00c47a]">
-                ${(stake + winPnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+        {/* TP / SL P&L preview */}
+        {stake >= 1 && levels && (
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <div className="rounded-lg border px-3 py-2.5"
+              style={{ background: "rgba(0,196,122,0.05)", borderColor: "rgba(0,196,122,0.15)" }}>
+              <div className="text-[10px] text-[#555]">Take profit @ ${formatPrice(levels.takeProfit, asset)}</div>
+              <div className="font-mono text-lg font-bold text-[#00c47a]">
+                {tpPnl >= 0 ? "+" : ""}${tpPnl.toFixed(2)}
               </div>
-              <div className="text-[10px] text-[#444]">
-                +${winPnl.toFixed(2)} profit · {((winPnl / stake) * 100).toFixed(0)}% return
+            </div>
+            <div className="rounded-lg border px-3 py-2.5"
+              style={{ background: "rgba(255,59,91,0.05)", borderColor: "rgba(255,59,91,0.15)" }}>
+              <div className="text-[10px] text-[#555]">Stop loss @ ${formatPrice(levels.stopLoss, asset)}</div>
+              <div className="font-mono text-lg font-bold text-[#ff3b5b]">
+                {slPnl >= 0 ? "+" : ""}${slPnl.toFixed(2)}
               </div>
             </div>
           </div>
@@ -213,7 +186,7 @@ export function PredictionPanel() {
       <div className="mt-auto p-4">
         {hasActive ? (
           <div className="rounded-lg border border-[#1c1c1c] bg-[#0d0d0d] px-4 py-3 text-center text-xs text-[#444]">
-            Trade active — wait for window to settle
+            Trade active — drag TP/SL on the chart, or wait for the window to settle
           </div>
         ) : (
           <button
@@ -231,11 +204,10 @@ export function PredictionPanel() {
               ? "Placing…"
               : !targetPrice || !windowId
               ? "Loading…"
-              : `${direction.toUpperCase()} ${asset} @ ${Math.round(entryP * 100)}¢`}
+              : `${direction === "above" ? "UP" : "DOWN"} ${asset} @ $${formatPrice(entryPrice, asset)}`}
           </button>
         )}
       </div>
     </div>
   );
 }
-

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCloseAt } from "@/lib/server/prices";
-import { calcPnl } from "@/lib/probability";
+import { calcLinearPnl } from "@/lib/probability";
 import type { Asset, Direction } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -61,19 +61,17 @@ export async function GET(request: NextRequest) {
     const endMs = new Date(p.expires_at).getTime();
     const close = await closePrice(p.asset as Asset, endMs);
 
-    const won = (p.direction as Direction) === "above"
-      ? close > Number(p.target_price)
-      : close < Number(p.target_price);
-
-    const exitProb = won ? 0.98 : 0.02;
-    const pnl      = Math.round(calcPnl(Number(p.stake), Number(p.entry_prob), exitProb) * 100) / 100;
+    // Linear close at the window's final price.
+    const pnl = Math.round(
+      calcLinearPnl(Number(p.stake), Number(p.entry_price), close, p.direction as Direction) * 100
+    ) / 100;
 
     await admin.rpc("settle_prediction", {
       p_prediction_id: p.id,
-      p_status:        won ? "won" : "lost",
+      p_status:        pnl > 0 ? "won" : "lost",
       p_pnl:           pnl,
       p_exit_price:    close,
-      p_exit_prob:     exitProb,
+      p_exit_prob:     null,
       p_exit_reason:   "expiry",
     });
     settled++;

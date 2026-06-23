@@ -1,5 +1,5 @@
 import type { ActivePrediction } from "@/types";
-import { calcPnl } from "@/lib/probability";
+import { calcLinearPnl } from "@/lib/probability";
 
 const XP_PER_WIN   = 25;
 const XP_PER_LEVEL = 400;
@@ -7,54 +7,51 @@ const XP_PER_LEVEL = 400;
 // ─── Trigger checks ────────────────────────────────────────────────────────
 
 /**
- * Check if the current direction probability has crossed a TP or SL threshold.
- * dirProb = P(user's direction wins right now).
+ * Check if the live price has crossed a TP or SL price level.
+ * UP   → TP when price ≥ tpPrice, SL when price ≤ slPrice.
+ * DOWN → TP when price ≤ tpPrice, SL when price ≥ slPrice.
  */
 export function checkPredictionTriggers(
   prediction: ActivePrediction,
-  dirProb: number
+  price: number
 ): "tp" | "sl" | null {
   if (prediction.status !== "active") return null;
-  if (dirProb >= prediction.tpProb) return "tp";
-  if (dirProb <= prediction.slProb) return "sl";
+  if (prediction.direction === "above") {
+    if (price >= prediction.tpPrice) return "tp";
+    if (price <= prediction.slPrice) return "sl";
+  } else {
+    if (price <= prediction.tpPrice) return "tp";
+    if (price >= prediction.slPrice) return "sl";
+  }
   return null;
 }
 
 // ─── Settlement ────────────────────────────────────────────────────────────
 
 /**
- * Settle at window expiry.
- * finalPrice vs targetPrice determines win/loss.
- * Payout is based on entry probability (prediction market model).
+ * Settle at window expiry — close the position at the final price (linear P&L).
  */
 export function settleExpiredPrediction(
   prediction: ActivePrediction,
   finalPrice: number
-): { status: "won" | "lost"; pnl: number; exitProb: number } {
-  const won = prediction.direction === "above"
-    ? finalPrice > prediction.targetPrice
-    : finalPrice < prediction.targetPrice;
-
-  const exitProb = won ? 0.98 : 0.02;
-  const pnl      = calcPnl(prediction.stake, prediction.entryProb, exitProb);
-
-  return { status: won ? "won" : "lost", pnl, exitProb };
+): { status: "won" | "lost"; pnl: number; exitPrice: number } {
+  const pnl = calcLinearPnl(prediction.stake, prediction.entryPrice, finalPrice, prediction.direction);
+  return { status: pnl > 0 ? "won" : "lost", pnl, exitPrice: finalPrice };
 }
 
 /**
- * Resolve an early TP or SL exit.
- * Exit probability: for TP use tpProb, for SL use slProb.
+ * Resolve an early TP or SL exit at the level price.
  */
 export function resolveTrigger(
   prediction: ActivePrediction,
   trigger: "tp" | "sl"
-): { status: "taken" | "stopped"; pnl: number; exitProb: number } {
-  const exitProb = trigger === "tp" ? prediction.tpProb : prediction.slProb;
-  const pnl      = calcPnl(prediction.stake, prediction.entryProb, exitProb);
+): { status: "taken" | "stopped"; pnl: number; exitPrice: number } {
+  const exitPrice = trigger === "tp" ? prediction.tpPrice : prediction.slPrice;
+  const pnl = calcLinearPnl(prediction.stake, prediction.entryPrice, exitPrice, prediction.direction);
   return {
     status:   trigger === "tp" ? "taken" : "stopped",
     pnl,
-    exitProb,
+    exitPrice,
   };
 }
 

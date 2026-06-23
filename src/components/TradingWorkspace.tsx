@@ -11,10 +11,9 @@ import {
   getWindowEnd,
   msToWindowEnd,
 } from "@/lib/prices";
-import { calcDirectionProb, defaultProbLevels } from "@/lib/probability";
+import { defaultPriceLevels } from "@/lib/probability";
 import type { WindowProbTick } from "@/lib/window-prob";
 import type { Timeframe } from "@/types";
-import { TIMEFRAME_MS } from "@/types";
 
 type Asset = import("@/types").Asset;
 
@@ -32,14 +31,12 @@ export function TradingWorkspace() {
   const checkTriggers   = useGameStore((s) => s.checkTriggers);
   const setWindow       = useGameStore((s) => s.setWindow);
   const setCurrentPrice = useGameStore((s) => s.setCurrentPrice);
-  const setCurrentProb  = useGameStore((s) => s.setCurrentProb);
   const setTpQty        = useGameStore((s) => s.setTpQty);
   const setSlQty        = useGameStore((s) => s.setSlQty);
   const tickPrice       = useGameStore((s) => s.tickPrice);
   const currentPrice    = useGameStore((s) => s.currentPrice);
-  const currentProb     = useGameStore((s) => s.currentProb);
 
-  const { probData, priceData, loadTicks } = useWindowProbFeed(windowId, direction);
+  const { priceData, loadTicks } = useWindowProbFeed(windowId, direction);
 
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
@@ -81,24 +78,22 @@ export function TradingWorkspace() {
         const price = candles[candles.length - 1]?.close ?? lastPriceRef.current;
         if (price > 0) {
           lastPriceRef.current = price;
-          const msLeft = msToWindowEnd(tf);
-          const prob   = calcDirectionProb(directionRef.current, price, target, msLeft, TIMEFRAME_MS[tf]);
           // Seed currentPrice AND prices[asset] so active-trade P&L is accurate
           // immediately on refresh instead of showing $0 until the first WS tick.
-          tickPrice(asset, price, prob);
+          tickPrice(asset, price);
+          setCurrentPrice(price);
           const active = useGameStore.getState().predictions.find(
             (p) => p.status === "active" && p.asset === asset && p.timeframe === tf
           );
           if (active) {
             setLevels({
-              entry:      active.entryProb,
-              takeProfit: active.tpProb,
-              stopLoss:   active.slProb,
+              entry:      active.entryPrice,
+              takeProfit: active.tpPrice,
+              stopLoss:   active.slPrice,
             });
           } else {
-            setLevels(defaultProbLevels(prob));
+            setLevels(defaultPriceLevels(price, directionRef.current));
           }
-          setCurrentProb(prob);
         }
       } catch (e) {
         setError(String(e));
@@ -106,7 +101,7 @@ export function TradingWorkspace() {
         setLoading(false);
       }
     },
-    [setWindow, setLevels, setCurrentProb, loadTicks, tickPrice]
+    [setWindow, setLevels, setCurrentPrice, loadTicks, tickPrice]
   );
 
   useEffect(() => {
@@ -145,42 +140,27 @@ export function TradingWorkspace() {
         lastPriceRef.current = price;
         chartRef.current?.updateLivePrice(price);
 
-        const target = targetRef.current;
-        const ms     = msToWindowEnd(timeframe);
-        const prob   = target > 0
-          ? calcDirectionProb(directionRef.current, price, target, ms, TIMEFRAME_MS[timeframe])
-          : 0.5;
-
         const now = Date.now();
         if (now - lastStoreTickRef.current >= STORE_INTERVAL_MS) {
           lastStoreTickRef.current = now;
           setCurrentPrice(price);
-          setCurrentProb(prob);
-          tickPrice(asset, price, prob);
+          tickPrice(asset, price);
         }
       }
     );
     return cleanup;
-  }, [asset, setCurrentPrice, setCurrentProb, tickPrice, timeframe, checkTriggers]);
+  }, [asset, setCurrentPrice, tickPrice, timeframe, checkTriggers]);
 
-  // Also check TP/SL when probability moves (chart line crosses bar)
+  // Re-default TP/SL levels when direction toggles — but only when there is no
+  // open position on this asset/timeframe (otherwise keep the live trade's levels).
   useEffect(() => {
     const price = lastPriceRef.current;
-    if (price <= 0 || targetRef.current <= 0) return;
-    checkTriggers(asset, price, currentProb);
-  }, [asset, checkTriggers, currentProb]);
-
-  // Recompute TP/SL levels when direction toggles (chart remaps via useWindowProbFeed)
-  useEffect(() => {
-    const price  = lastPriceRef.current;
-    const target = targetRef.current;
-    if (price > 0 && target > 0) {
-      const ms   = msToWindowEnd(timeframe);
-      const prob = calcDirectionProb(direction, price, target, ms, TIMEFRAME_MS[timeframe]);
-      setLevels(defaultProbLevels(prob));
-      setCurrentProb(prob);
-    }
-  }, [direction, timeframe, setLevels, setCurrentProb]);
+    if (price <= 0) return;
+    const active = useGameStore.getState().predictions.find(
+      (p) => p.status === "active" && p.asset === asset && p.timeframe === timeframe
+    );
+    if (!active) setLevels(defaultPriceLevels(price, direction));
+  }, [direction, timeframe, asset, setLevels]);
 
   const handleLevelsChange = useCallback(
     (newLevels: typeof levels) => { if (newLevels) setLevels(newLevels); },
@@ -192,7 +172,7 @@ export function TradingWorkspace() {
       setLevels(newLevels);
       syncLevelsToActive(newLevels);
       const price = lastPriceRef.current;
-      if (price > 0) checkTriggers(asset, price, useGameStore.getState().currentProb);
+      if (price > 0) checkTriggers(asset, price);
     },
     [setLevels, syncLevelsToActive, checkTriggers, asset]
   );
@@ -231,7 +211,6 @@ export function TradingWorkspace() {
         asset={asset}
         timeframe={timeframe}
         priceData={priceData}
-        probData={probData}
         currentPrice={currentPrice}
         targetPrice={targetPrice}
         windowStartSec={windowStartSec}

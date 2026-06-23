@@ -2,8 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCurrentPrice } from "@/lib/server/prices";
-import { calcDirectionProb, calcPnl } from "@/lib/probability";
-import { TIMEFRAME_MS, type Direction, type Timeframe } from "@/types";
+import { calcLinearPnl } from "@/lib/probability";
+import { type Direction } from "@/types";
 
 /**
  * POST /api/predictions/exit — early exit (TP / SL / manual).
@@ -37,45 +37,46 @@ export async function POST(request: NextRequest) {
   try { price = await fetchCurrentPrice(pred.asset); }
   catch { return NextResponse.json({ error: "price unavailable" }, { status: 502 }); }
 
-  const totalMs = TIMEFRAME_MS[pred.timeframe as Timeframe];
-  const endMs   = new Date(pred.expires_at).getTime();
-  const msLeft  = Math.max(0, endMs - Date.now());
-  const dirProb = calcDirectionProb(
-    pred.direction as Direction, price, Number(pred.target_price), msLeft, totalMs
-  );
+  const direction = pred.direction as Direction;
+  const entry  = Number(pred.entry_price);
+  const tp     = Number(pred.tp_price);
+  const sl     = Number(pred.sl_price);
+  // Small tolerance (~0.02%) so a momentary touch still honors the trigger.
+  const tol = entry * 0.0002;
 
-  // Validate the trigger condition server-side
-  let exitProb = dirProb;
+  // Validate the trigger condition server-side, then settle at the level price.
+  let exitPrice = price;
   let status: "taken" | "stopped";
   if (reason === "tp") {
-    if (dirProb < Number(pred.tp_prob) - 0.008)
-      return NextResponse.json({ error: "TP not reached" }, { status: 409 });
-    exitProb = Math.max(Number(pred.tp_prob), dirProb);
+    const reached = direction === "above" ? price >= tp - tol : price <= tp + tol;
+    if (!reached) return NextResponse.json({ error: "TP not reached" }, { status: 409 });
+    exitPrice = tp;
     status = "taken";
   } else if (reason === "sl") {
-    if (dirProb > Number(pred.sl_prob) + 0.008)
-      return NextResponse.json({ error: "SL not reached" }, { status: 409 });
-    exitProb = Math.min(Number(pred.sl_prob), dirProb);
+    const reached = direction === "above" ? price <= sl + tol : price >= sl - tol;
+    if (!reached) return NextResponse.json({ error: "SL not reached" }, { status: 409 });
+    exitPrice = sl;
     status = "stopped";
   } else {
-    // manual close at current probability
-    status = dirProb >= Number(pred.entry_prob) ? "taken" : "stopped";
+    // manual close at the live price
+    const pnlNow = calcLinearPnl(Number(pred.stake), entry, price, direction);
+    status = pnlNow >= 0 ? "taken" : "stopped";
   }
 
-  const pnl = calcPnl(Number(pred.stake), Number(pred.entry_prob), exitProb);
+  const pnl = calcLinearPnl(Number(pred.stake), entry, exitPrice, direction);
 
   const { error } = await admin.rpc("settle_prediction", {
     p_prediction_id: predictionId,
     p_status:        status,
     p_pnl:           round2(pnl),
-    p_exit_price:    price,
-    p_exit_prob:     round5(exitProb),
+    p_exit_price:    round8(exitPrice),
+    p_exit_prob:     null,
     p_exit_reason:   reason === "manual" ? "manual" : reason,
   });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, status, pnl: round2(pnl), exitProb });
+  return NextResponse.json({ ok: true, status, pnl: round2(pnl), exitPrice });
 }
 
 function round2(v: number) { return Math.round(v * 100) / 100; }
-function round5(v: number) { return Math.round(v * 1e5) / 1e5; }
+function round8(v: number) { return Math.round(v * 1e8) / 1e8; }

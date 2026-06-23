@@ -9,9 +9,10 @@ const BINANCE_WS_BASES = [
 
 // ─── Wall-clock window helpers ──────────────────────────────────────────────
 // Windows are always aligned to wall clock:
+//   5m  → :00 :05 :10 …
 //   15m → :00 :15 :30 :45
 //   1h  → :00 each hour
-//   2h  → :00 :02 :04 …
+//   1d  → 00:00 UTC each day
 
 export function getWindowStart(tf: Timeframe): number {
   const ms = TIMEFRAME_MS[tf];
@@ -51,10 +52,11 @@ function parseCandles(data: unknown[][]): Candle[] {
 
 // ─── Current window candles ──────────────────────────────────────────────────
 // Fetches 1-min candles starting from the current wall-clock window boundary.
-// For 15m: at most 15 candles; 1h: 60; 2h: 120.
+// For 5m: at most 5 candles; 15m: 15; 1h: 60; 1d: capped at 1000.
 export async function fetchWindowCandles(asset: Asset, tf: Timeframe): Promise<Candle[]> {
   const windowStart = getWindowStart(tf);
-  const maxCandles  = TIMEFRAME_MS[tf] / 60_000; // window duration in minutes
+  // Window duration in minutes, capped at Binance's 1000-candle limit (1d > 1000).
+  const maxCandles  = Math.min(1000, TIMEFRAME_MS[tf] / 60_000);
   const symbol      = assetSymbol(asset);
   const data        = await klinesFetch(symbol, "1m", maxCandles, windowStart);
   return parseCandles(data);
