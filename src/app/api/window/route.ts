@@ -6,7 +6,7 @@ import { ensureWindowTicks, type WindowRow } from "@/lib/server/window-feed";
 import type { Asset, Timeframe } from "@/types";
 
 const ASSETS: Asset[] = ["BTC", "ETH", "SOL"];
-const TFS: Timeframe[] = ["15m", "1h", "2h"];
+const TFS: Timeframe[] = ["5m", "15m", "1h", "1d"];
 
 /**
  * GET /api/window?asset=BTC&timeframe=15m

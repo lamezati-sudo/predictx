@@ -1,9 +1,8 @@
 "use client";
 
 import { create } from "zustand";
-import type { ActivePrediction, Asset, Direction, ProbLevels, Timeframe, PredictionStatus } from "@/types";
-import { calcDirectionProb } from "@/lib/probability";
-import { TIMEFRAME_MS } from "@/types";
+import type { ActivePrediction, Asset, Direction, PriceLevels, Timeframe, PredictionStatus } from "@/types";
+import { checkPredictionTriggers } from "@/lib/prediction-engine";
 
 interface Toast {
   id: string;
@@ -19,16 +18,14 @@ export interface PredictionRow {
   direction: string;
   entry_price: number;
   target_price: number;
-  entry_prob: number;
-  tp_prob: number;
-  sl_prob: number;
+  tp_price: number;
+  sl_price: number;
   tp_qty: number;
   sl_qty: number;
   stake: number;
   status: string;
   pnl: number | null;
   exit_price: number | null;
-  exit_prob: number | null;
   exit_reason: string | null;
   opened_at: string;
   expires_at: string;
@@ -53,9 +50,8 @@ function rowToPrediction(r: PredictionRow): ActivePrediction {
     direction:   r.direction as Direction,
     entryPrice:  Number(r.entry_price),
     targetPrice: Number(r.target_price),
-    entryProb:   Number(r.entry_prob),
-    tpProb:      Number(r.tp_prob),
-    slProb:      Number(r.sl_prob),
+    tpPrice:     Number(r.tp_price),
+    slPrice:     Number(r.sl_price),
     tpQty:       r.tp_qty,
     slQty:       r.sl_qty,
     stake:       Number(r.stake),
@@ -64,7 +60,6 @@ function rowToPrediction(r: PredictionRow): ActivePrediction {
     status:      r.status as PredictionStatus,
     pnl:         r.pnl   == null ? undefined : Number(r.pnl),
     exitPrice:   r.exit_price == null ? undefined : Number(r.exit_price),
-    exitProb:    r.exit_prob  == null ? undefined : Number(r.exit_prob),
     exitReason:  (r.exit_reason as ActivePrediction["exitReason"]) ?? undefined,
   };
 }
@@ -91,9 +86,8 @@ interface GameState {
   asset:        Asset;
   timeframe:    Timeframe;
   direction:    Direction;
-  levels:       ProbLevels | null;
+  levels:       PriceLevels | null;
   targetPrice:  number;
-  currentProb:  number;
   stake:        number;
   tpQty:        number;
   slQty:        number;
@@ -111,9 +105,8 @@ interface GameState {
   setAsset:        (asset: Asset)         => void;
   setTimeframe:    (timeframe: Timeframe) => void;
   setDirection:    (direction: Direction) => void;
-  setLevels:       (levels: ProbLevels)   => void;
+  setLevels:       (levels: PriceLevels)  => void;
   setTargetPrice:  (price: number)        => void;
-  setCurrentProb:  (prob: number)         => void;
   setStake:        (stake: number)        => void;
   setTpQty:        (qty: number)          => void;
   setSlQty:        (qty: number)          => void;
@@ -122,9 +115,9 @@ interface GameState {
 
   // ── Server-backed game actions ──
   placePrediction: () => Promise<boolean>;
-  syncLevelsToActive: (levels: ProbLevels, tpQty?: number, slQty?: number) => void;
-  checkTriggers:     (asset: Asset, price: number, dirProb?: number) => void;
-  tickPrice:         (asset: Asset, price: number, dirProb?: number) => void;
+  syncLevelsToActive: (levels: PriceLevels, tpQty?: number, slQty?: number) => void;
+  checkTriggers:     (asset: Asset, price: number) => void;
+  tickPrice:         (asset: Asset, price: number) => void;
   dismissToast:      (id: string) => void;
 }
 
@@ -158,7 +151,6 @@ export const useGameStore = create<GameState>()((set, get) => ({
   direction:    "above",
   levels:       null,
   targetPrice:  0,
-  currentProb:  0.5,
   stake:        100,
   tpQty:        100,
   slQty:        100,
@@ -194,9 +186,9 @@ export const useGameStore = create<GameState>()((set, get) => ({
     if (active) {
       set({
         levels: {
-          entry:      active.entryProb,
-          takeProfit: active.tpProb,
-          stopLoss:   active.slProb,
+          entry:      active.entryPrice,
+          takeProfit: active.tpPrice,
+          stopLoss:   active.slPrice,
         },
         tpQty: active.tpQty,
         slQty: active.slQty,
@@ -237,7 +229,6 @@ export const useGameStore = create<GameState>()((set, get) => ({
   setDirection:    (direction) => set({ direction }),
   setLevels:       (levels)    => set({ levels }),
   setTargetPrice:  (price)     => set({ targetPrice: price }),
-  setCurrentProb:  (prob)      => set({ currentProb: prob }),
   setStake:        (stake)     => set({ stake: Math.max(1, Math.min(stake, get().balance)) }),
   setTpQty:        (qty)       => set({ tpQty: Math.max(1, Math.min(100, Math.round(qty))) }),
   setSlQty:        (qty)       => set({ slQty: Math.max(1, Math.min(100, Math.round(qty))) }),
@@ -247,9 +238,14 @@ export const useGameStore = create<GameState>()((set, get) => ({
   // ── Place (server) ──
   placePrediction: async () => {
     const s = get();
-    const { levels, stake, balance, direction, windowId, currentProb } = s;
-    if (!windowId || !levels || stake <= 0 || stake > balance || currentProb <= 0) return false;
-    if (levels.takeProfit <= levels.entry || levels.stopLoss >= levels.entry) return false;
+    const { levels, stake, balance, direction, windowId } = s;
+    if (!windowId || !levels || stake <= 0 || stake > balance) return false;
+    // UP: TP above entry, SL below. DOWN: TP below entry, SL above.
+    if (direction === "above") {
+      if (levels.takeProfit < levels.entry || levels.stopLoss > levels.entry) return false;
+    } else {
+      if (levels.takeProfit > levels.entry || levels.stopLoss < levels.entry) return false;
+    }
 
     try {
       const res = await fetch("/api/predictions", {
@@ -259,8 +255,8 @@ export const useGameStore = create<GameState>()((set, get) => ({
           windowId,
           direction,
           stake,
-          tpProb: levels.takeProfit,
-          slProb: levels.stopLoss,
+          tpPrice: levels.takeProfit,
+          slPrice: levels.stopLoss,
           tpQty:  s.tpQty,
           slQty:  s.slQty,
         }),
@@ -281,7 +277,7 @@ export const useGameStore = create<GameState>()((set, get) => ({
           stopLoss:   levels.stopLoss,
         },
         toasts:  addToast(get().toasts, "info",
-          `${direction.toUpperCase()} ${s.asset} @ ${Math.round(levels.entry * 100)}¢`),
+          `${direction.toUpperCase()} ${s.asset} @ $${levels.entry.toLocaleString("en-US", { maximumFractionDigits: 2 })}`),
       });
       return true;
     } catch {
@@ -303,7 +299,7 @@ export const useGameStore = create<GameState>()((set, get) => ({
         levels,
         predictions: s.predictions.map((p) =>
         p.id === pred.id
-          ? { ...p, tpProb: levels.takeProfit, slProb: levels.stopLoss,
+          ? { ...p, tpPrice: levels.takeProfit, slPrice: levels.stopLoss,
               tpQty: tpQty ?? p.tpQty, slQty: slQty ?? p.slQty }
           : p
       ),
@@ -314,8 +310,8 @@ export const useGameStore = create<GameState>()((set, get) => ({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         predictionId: pred.id,
-        tpProb:       levels.takeProfit,
-        slProb:       levels.stopLoss,
+        tpPrice:      levels.takeProfit,
+        slPrice:      levels.stopLoss,
         tpQty:        tpQty ?? s.tpQty,
         slQty:        slQty ?? s.slQty,
       }),
@@ -328,8 +324,8 @@ export const useGameStore = create<GameState>()((set, get) => ({
       .catch(() => { /* realtime / next drag will retry */ });
   },
 
-  /** Check TP/SL for all active predictions on this asset. */
-  checkTriggers: (asset, price, dirProbOverride) => {
+  /** Check TP/SL price levels for all active predictions on this asset. */
+  checkTriggers: (asset, price) => {
     const s = get();
     const now = Date.now();
 
@@ -338,27 +334,13 @@ export const useGameStore = create<GameState>()((set, get) => ({
       if (now >= p.expiresAt) continue;
       if (exiting.has(p.id)) continue;
 
-      const totalMs = TIMEFRAME_MS[p.timeframe];
-      const msLeft  = Math.max(0, p.expiresAt - now);
-
-      // Per-prediction direction probability
-      const useOverride = dirProbOverride != null
-        && p.asset === s.asset
-        && p.timeframe === s.timeframe
-        && p.direction === s.direction;
-      const dirProb = useOverride
-        ? dirProbOverride
-        : calcDirectionProb(p.direction, price, p.targetPrice, msLeft, totalMs);
-
-      // Use chart levels when they belong to this open trade
+      // Use chart levels when they belong to this open trade, else stored ones
       const uiLevels = p.asset === s.asset && p.timeframe === s.timeframe ? s.levels : null;
-      const tpProb   = uiLevels?.takeProfit ?? p.tpProb;
-      const slProb   = uiLevels?.stopLoss   ?? p.slProb;
+      const effective: ActivePrediction = uiLevels
+        ? { ...p, tpPrice: uiLevels.takeProfit, slPrice: uiLevels.stopLoss }
+        : p;
 
-      let reason: "tp" | "sl" | null = null;
-      if (dirProb >= tpProb) reason = "tp";
-      else if (dirProb <= slProb) reason = "sl";
-
+      const reason = checkPredictionTriggers(effective, price);
       if (!reason) continue;
 
       exiting.add(p.id);
@@ -380,13 +362,13 @@ export const useGameStore = create<GameState>()((set, get) => ({
     }
   },
 
-  tickPrice: (asset, price, dirProb) => {
+  tickPrice: (asset, price) => {
     const s = get();
     set({
       currentPrice: asset === s.asset ? price : s.currentPrice,
       prices:       { ...s.prices, [asset]: price },
     });
-    get().checkTriggers(asset, price, dirProb);
+    get().checkTriggers(asset, price);
   },
 
   dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) })),

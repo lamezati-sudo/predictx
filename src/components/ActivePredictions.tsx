@@ -1,9 +1,8 @@
 "use client";
 
 import { useGameStore } from "@/store/game-store";
-import { calcDirectionProb, calcPnl } from "@/lib/probability";
-import { formatUsd } from "@/types";
-import { TIMEFRAME_MS } from "@/types";
+import { calcLinearPnl } from "@/lib/probability";
+import { formatUsd, formatPrice } from "@/types";
 
 function fmt(ms: number) {
   if (ms <= 0) return "closing…";
@@ -44,17 +43,11 @@ export function ActivePredictions() {
                 ? prices[p.asset]
                 : p.asset === currentAsset && currentPrice > 0
                   ? currentPrice
-                  : 0;
+                  : p.entryPrice;
               const msRemaining = Math.max(0, p.expiresAt - Date.now());
-              const totalMs     = TIMEFRAME_MS[p.timeframe];
-
-              // Live probability of user's direction right now
-              const dirProb = livePrice > 0
-                ? calcDirectionProb(p.direction, livePrice, p.targetPrice, msRemaining, totalMs)
-                : p.entryProb;
 
               // Mark-to-market PnL (what you'd get if you closed NOW)
-              const unrealizedPnl = calcPnl(p.stake, p.entryProb, dirProb);
+              const unrealizedPnl = calcLinearPnl(p.stake, p.entryPrice, livePrice, p.direction);
               const isGaining     = unrealizedPnl >= 0;
 
               return (
@@ -69,18 +62,18 @@ export function ActivePredictions() {
                     {p.direction === "above" ? "▲" : "▼"} {p.direction.toUpperCase()}
                   </span>
 
-                  {/* Asset + entry prob */}
+                  {/* Asset + entry price */}
                   <span className="text-[11px] text-[#444]">
                     {p.asset}
                     <span className="ml-1.5 font-mono text-[#555]">
-                      @{Math.round(p.entryProb * 100)}¢
+                      @${formatPrice(p.entryPrice, p.asset)}
                     </span>
                   </span>
 
-                  {/* Live prob */}
+                  {/* Live price */}
                   <span className="font-mono text-[11px] font-bold"
                     style={{ color: isGaining ? "#00c47a" : "#ff3b5b" }}>
-                    {Math.round(dirProb * 100)}¢
+                    ${formatPrice(livePrice, p.asset)}
                   </span>
 
                   <div className="ml-auto flex items-center gap-3">
@@ -113,9 +106,9 @@ export function ActivePredictions() {
             {history.slice(0, 8).map((p) => (
               <div key={p.id} className="flex items-center justify-between px-1 py-1">
                 <span className="text-[11px] text-[#444]">
-                  {p.direction.toUpperCase()} {p.asset}
+                  {p.direction === "above" ? "UP" : "DOWN"} {p.asset}
                   <span className="ml-1 text-[#2a2a2a]">
-                    · {p.exitReason} · {Math.round(p.entryProb * 100)}¢→{Math.round((p.exitProb ?? 0) * 100)}¢
+                    · {p.exitReason} · ${formatPrice(p.entryPrice, p.asset)}→${formatPrice(p.exitPrice ?? p.entryPrice, p.asset)}
                   </span>
                 </span>
                 <span className="font-mono text-[11px] font-semibold"

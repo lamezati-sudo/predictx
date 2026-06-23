@@ -2,8 +2,8 @@
 
 import { useGameStore } from "@/store/game-store";
 import { levelFromXp, xpProgress } from "@/lib/prediction-engine";
-import { calcDirectionProb, calcPnl } from "@/lib/probability";
-import { ASSETS, TIMEFRAME_MS } from "@/types";
+import { calcLinearPnl } from "@/lib/probability";
+import { ASSETS } from "@/types";
 
 export function Header() {
   const balance = useGameStore((s) => s.balance);
@@ -25,12 +25,8 @@ export function Header() {
   const unrealizedPnl = predictions
     .filter((p) => p.status === "active")
     .reduce((sum, p) => {
-      const livePrice   = prices[p.asset];
-      const msRemaining = Math.max(0, p.expiresAt - Date.now());
-      const dirProb     = livePrice > 0
-        ? calcDirectionProb(p.direction, livePrice, p.targetPrice, msRemaining, TIMEFRAME_MS[p.timeframe])
-        : p.entryProb;
-      return sum + calcPnl(p.stake, p.entryProb, dirProb);
+      const livePrice = prices[p.asset] > 0 ? prices[p.asset] : p.entryPrice;
+      return sum + calcLinearPnl(p.stake, p.entryPrice, livePrice, p.direction);
     }, 0);
 
   const lockedStake = predictions.filter((p) => p.status === "active").reduce((s, p) => s + p.stake, 0);

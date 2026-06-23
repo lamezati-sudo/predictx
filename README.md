@@ -23,7 +23,7 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ## How to play
 
-1. Pick an asset (BTC, ETH, SOL) and a timeframe (15m / 1h / 2h)
+1. Pick an asset (BTC, ETH, SOL) and a timeframe (5m / 15m / 1h / 1d)
 2. Choose **LONG** (price goes up) or **SHORT** (price goes down)
 3. **Drag the lines** on the chart:
    - **Blue** = Entry (your prediction price)
